@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/peterkure/wmux/internal/proto"
 )
@@ -57,6 +59,8 @@ func usage() {
   wmux attach --id ID --cwd PATH -- CMD  run CMD interactively (real TTY), tracked by the daemon
   wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split v|h|tab]
                                           open a new wt.exe pane running 'wmux attach' inside WSL
+  wmux pane --native --id ID --cwd PATH --cmd CMD [--split v|h|tab]
+                                          same, but runs CMD directly on Windows, no WSL
   wmux list                              list sessions and their state
   wmux watch                             stream notifications as they arrive`)
 }
@@ -257,43 +261,34 @@ func cmdAttach(args []string) {
 }
 
 // cmdPane opens a new Windows Terminal tab or split pane that runs `wmux
-// attach` inside a WSL distro. This only shells out to wt.exe — it never
-// talks to the daemon itself; the daemon interaction happens once `wmux
-// attach` starts running inside the new pane. Run this from PowerShell,
-// not from inside WSL (wt.exe isn't reachable from within a distro).
+// attach` for you. This only shells out to wt.exe — it never talks to the
+// daemon itself; the daemon interaction happens once `wmux attach` starts
+// running inside the new pane. Run this from PowerShell, not from inside
+// WSL (wt.exe isn't reachable from within a distro).
+//
+// Two modes, picked by --native:
+//   - default (WSL): the pane runs `wmux attach` inside a WSL distro via
+//     `wsl.exe -d <distro> -- bash -lc ...`. Only useful when the agent is
+//     actually installed inside that distro.
+//   - --native: the pane runs `wmux attach` directly on Windows via
+//     `powershell.exe -EncodedCommand ...`, no WSL involved at all. Use
+//     this when the agent (e.g. claude.exe) is a native Windows install —
+//     check with `where claude`/`where codex` first, since having a WSL
+//     distro on the machine doesn't mean the agent runs inside it.
 func cmdPane(args []string) {
 	fs := newFlagSet("pane")
 	id := fs.String("id", "", "session ID")
-	cwd := fs.String("cwd", "", "working directory inside the WSL distro")
-	distro := fs.String("distro", "", "WSL distro name (defaults to your system's default WSL distro if omitted)")
-	command := fs.String("cmd", "", "command to run interactively, e.g. 'claude'")
+	cwd := fs.String("cwd", "", "working directory (WSL path unless --native)")
+	distro := fs.String("distro", "", "WSL distro name (ignored with --native; defaults to your system's default WSL distro if omitted)")
+	command := fs.String("cmd", "", "command to run interactively, e.g. 'claude' (WSL mode) or a full .exe path (--native)")
 	split := fs.String("split", "tab", "'tab', 'v' (vertical split), or 'h' (horizontal split)")
+	native := fs.Bool("native", false, "run --cmd directly on Windows, no WSL — use when the agent is a native Windows install")
 	fs.Parse(args)
 
 	if *id == "" || *cwd == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux pane: --id, --cwd, and --cmd are required")
 		os.Exit(1)
 	}
-
-	// Runs inside the distro: exec wmux attach with a real TTY, tracked
-	// under --id, which then execs the actual agent command interactively.
-	innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
-		shellQuote(*id), shellQuote(*cwd), shellQuote(*distro), *command)
-
-	// wt.exe's own command-line parser splits on unescaped ';' to chain
-	// multiple wt subcommands ("wt new-tab ; split-pane ; ..."), so any
-	// semicolon anywhere in --cmd (e.g. a compound shell command like
-	// "foo; bar") silently truncates everything after it before it ever
-	// reaches wsl.exe. Base64-encode the whole inner command so wt.exe only
-	// ever sees one opaque token. Also avoid embedded double quotes/`eval
-	// "$(...)"` here: verified empirically that wt.exe's re-tokenizing of
-	// the trailing commandline mangles a token containing literal `"`
-	// characters (likely a quoting-convention mismatch between Go's argv
-	// escaping and wt.exe's own parser), even though the same payload runs
-	// fine via wsl.exe/bash directly. A pure pipe with no quote characters
-	// at all (`echo B64|base64 -d|bash`) survives intact.
-	encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
-	execCmd := fmt.Sprintf("echo %s|base64 -d|bash", encoded)
 
 	wtArgs := []string{"-w", "0"}
 	switch *split {
@@ -304,11 +299,47 @@ func cmdPane(args []string) {
 	default:
 		wtArgs = append(wtArgs, "new-tab")
 	}
-	wtArgs = append(wtArgs, "--title", *id, "wsl.exe")
-	if *distro != "" {
-		wtArgs = append(wtArgs, "-d", *distro)
+	wtArgs = append(wtArgs, "--title", *id)
+
+	if *native {
+		// wmuxExe resolves to this same binary's absolute path, so the
+		// pane can find it regardless of whatever PATH state the new
+		// powershell.exe process starts with.
+		wmuxExe, err := os.Executable()
+		if err != nil {
+			wmuxExe = "wmux.exe" // fall back to PATH lookup
+		}
+		innerCmd := fmt.Sprintf("& %s attach --id %s --cwd %s -- %s",
+			psQuote(wmuxExe), psQuote(*id), psQuote(*cwd), *command)
+		wtArgs = append(wtArgs, "powershell.exe", "-EncodedCommand", psEncodedCommand(innerCmd))
+	} else {
+		// Runs inside the distro: exec wmux attach with a real TTY, tracked
+		// under --id, which then execs the actual agent command interactively.
+		innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
+			shellQuote(*id), shellQuote(*cwd), shellQuote(*distro), *command)
+
+		// wt.exe's own command-line parser splits on unescaped ';' to chain
+		// multiple wt subcommands ("wt new-tab ; split-pane ; ..."), so any
+		// semicolon anywhere in --cmd (e.g. a compound shell command like
+		// "foo; bar") silently truncates everything after it before it ever
+		// reaches wsl.exe. Base64-encode the whole inner command so wt.exe
+		// only ever sees one opaque token. Also avoid embedded double
+		// quotes/`eval "$(...)"` here: verified empirically that wt.exe's
+		// re-tokenizing of the trailing commandline mangles a token
+		// containing literal `"` characters (likely a quoting-convention
+		// mismatch between Go's argv escaping and wt.exe's own parser),
+		// even though the same payload runs fine via wsl.exe/bash directly.
+		// A pure pipe with no quote characters at all
+		// (`echo B64|base64 -d|bash`) survives intact.
+		encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
+		execCmd := fmt.Sprintf("echo %s|base64 -d|bash", encoded)
+
+		wtArgs = append(wtArgs, "wsl.exe")
+		if *distro != "" {
+			wtArgs = append(wtArgs, "-d", *distro)
+		}
+		wtArgs = append(wtArgs, "--cd", *cwd, "--", "bash", "-lc", execCmd)
 	}
-	wtArgs = append(wtArgs, "--cd", *cwd, "--", "bash", "-lc", execCmd)
 
 	cmd := exec.Command("wt.exe", wtArgs...)
 	if err := cmd.Start(); err != nil {
@@ -322,6 +353,30 @@ func cmdPane(args []string) {
 // above, escaping any embedded single quotes the POSIX way.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// psQuote wraps a value in single quotes for a PowerShell command string,
+// escaping any embedded single quotes PowerShell's way (doubled, not
+// backslash-escaped).
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// psEncodedCommand base64-encodes a PowerShell script as UTF-16LE for
+// `powershell.exe -EncodedCommand`, PowerShell's own documented mechanism
+// for passing an arbitrary script as a single opaque token. Used here for
+// the same reason the WSL path base64-encodes through a pipe: it avoids
+// handing wt.exe's trailing-commandline tokenizer a token containing
+// semicolons or quote characters, both of which have been observed to
+// break as they cross the wt.exe layer (see the comment above the WSL
+// branch in cmdPane).
+func psEncodedCommand(script string) string {
+	units := utf16.Encode([]rune(script))
+	buf := make([]byte, len(units)*2)
+	for i, u := range units {
+		binary.LittleEndian.PutUint16(buf[i*2:], u)
+	}
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
 func cmdNew(args []string) {

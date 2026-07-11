@@ -157,11 +157,46 @@ to the user's real configured default distro instead of a guessed name.
 Verified: `wmux new` with no `--distro` flag now correctly reaches
 `archlinux` and completes the full spawn → notify → exit cycle.
 
+**Follow-up feature (2026-07-11): `wmux pane --native`.** The real machine
+this was tested on turned out to run `claude.exe` as a **native Windows
+install**, not inside WSL at all (`where claude` → a `.exe` path), even
+though a WSL distro (archlinux) is present on the machine for other
+things — confirms the skill's Step 0 advice to check rather than assume.
+Plain `wmux pane` can't launch a native binary (always routes through
+`wsl.exe`), so added `--native`: same `wt.exe` pane, but runs
+`wmux attach` via `powershell.exe -EncodedCommand` (UTF-16LE base64,
+PowerShell's own documented single-opaque-token mechanism) instead of
+`wsl.exe -d ... -- bash -lc`, for the same reason the WSL path avoids raw
+quoting through `wt.exe` — verified working, including with a semicolon
+in `--cmd` to stress-test it the same way as the WSL fix.
+
+Also verified: real Claude Code hook wiring against a live `claude.exe`
+install (`~/.claude/settings.json` → `Notification` hook →
+`C:\wmux\wmux.exe hook-claude`, fired correctly) and `wmux attach`
+wrapping a real native process end to end (register → run → exit-code
+propagation → deregister).
+
+**PowerShell 5.1 quoting gotcha found while testing `--native`:** passing
+`--cmd` a value containing embedded literal `"` characters (e.g.
+`'"C:\Users\Peter Kure\...\claude.exe" --version'`, needed because the
+path contains a space) silently corrupted argument parsing — specifically
+it ate the trailing `--split h` flag, which silently fell back to the
+`tab` default. Reproduced with both an inline string and a variable
+assignment, so it's not a quoting-style issue on the calling side — this
+is PowerShell 5.1's documented legacy native-argv marshalling being
+unreliable around embedded double quotes (predates the `$PSNativeCommand
+ArgumentPassing='Standard'` fix in PS 7.3+). Not fixable from the Go
+binary's side since the corruption happens before wmux.exe ever sees the
+arguments. Workaround: use the target's 8.3 short path
+(`(New-Object -ComObject Scripting.FileSystemObject).GetFile(...).ShortPath`)
+to avoid needing embedded quotes at all — verified this sidesteps it
+completely.
+
 **Still not tested:**
 
-- Real Claude Code / Codex hook wiring end-to-end with a live agent
-  actually invoking the hook (only tested with hand-constructed payloads
-  matching documented formats)
+- Real Codex hook wiring end-to-end with a live Codex invocation (Codex
+  isn't installed anywhere on this machine, native or WSL — only tested
+  with a hand-constructed payload matching the documented format)
 - Session persistence / restart behavior beyond a single daemon lifetime
 
 ## Not yet built (see README "Next steps" for the live list)

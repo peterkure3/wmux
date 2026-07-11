@@ -67,17 +67,34 @@ wmux attach --id my-project --cwd /home/you/my-project -- claude
 ```
 
 `wmux pane` (run from PowerShell, not from inside WSL) opens a new
-Windows Terminal tab or split pane that runs `wmux attach` inside a WSL
-distro for you:
+Windows Terminal tab or split pane that runs `wmux attach` for you. By
+default it runs the command inside a WSL distro:
 
 ```powershell
 wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split v
+```
+
+Pass `--native` to run the command directly on Windows instead — no WSL,
+no `wsl.exe` involved — for agents that are native Windows installs
+(check with `where claude`/`where codex` first; having a WSL distro on
+the machine doesn't mean the agent runs inside it):
+
+```powershell
+wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe --split v
 ```
 
 `--split` accepts `tab` (default), `v` (vertical split), or `h`
 (horizontal split). This only shells out to `wt.exe -w 0 ...` — it doesn't
 talk to the daemon itself; that happens once `wmux attach` starts running
 inside the pane it just opened.
+
+**PowerShell 5.1 quoting note for `--native --cmd`:** if the agent's path
+contains a space (e.g. a username like `C:\Users\Jane Doe\...`), avoid
+wrapping it in embedded double quotes inside `--cmd` — PowerShell 5.1's
+native-argv passing mangles arguments with literal embedded `"`
+characters and can silently drop trailing flags like `--split`. Use the
+8.3 short path instead (no spaces, no quoting needed):
+`(New-Object -ComObject Scripting.FileSystemObject).GetFile("C:\Users\Jane Doe\...\claude.exe").ShortPath`.
 
 ## Building from source
 
