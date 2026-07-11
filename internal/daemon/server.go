@@ -16,6 +16,8 @@ func (d *Daemon) Serve(addr string) error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/sessions", d.handleSessions)
+	mux.HandleFunc("/sessions/register", d.handleRegister)
+	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
 	mux.HandleFunc("/notify", d.handleNotify)
 	mux.HandleFunc("/events", d.handleEvents)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +49,45 @@ func (d *Daemon) handleSessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleRegister lets `wmux attach` register a session it owns the TTY
+// for, without the daemon spawning or piping the process itself.
+func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.RegisterSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sess, err := d.Register(req.ID, req.Cwd, req.Distro)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	json.NewEncoder(w).Encode(sess.Info())
+}
+
+// handleDeregister marks an attach-mode session as no longer running,
+// called by `wmux attach` right before it exits.
+func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.DeregisterSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.Deregister(req.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleNotify lets a CLI push a notification directly over HTTP, as an

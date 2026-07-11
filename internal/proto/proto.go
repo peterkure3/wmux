@@ -30,3 +30,17 @@ type NewSessionRequest struct {
 	Command string `json:"command"`
 	Distro  string `json:"distro,omitempty"` // WSL distro name; empty = host shell
 }
+
+// RegisterSessionRequest is the body for POST /sessions/register — used by
+// `wmux attach`, where the daemon tracks metadata but doesn't own the
+// process (the caller keeps a real TTY attached to the agent directly).
+type RegisterSessionRequest struct {
+	ID     string `json:"id"`
+	Cwd    string `json:"cwd"`
+	Distro string `json:"distro,omitempty"`
+}
+
+// DeregisterSessionRequest is the body for POST /sessions/deregister.
+type DeregisterSessionRequest struct {
+	ID string `json:"id"`
+}

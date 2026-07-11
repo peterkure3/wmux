@@ -6,9 +6,15 @@ OSC 9/99/777 notification escape sequences, tracks git branch and listening
 ports per session, and serves it all over a local HTTP API. `wmux` is the
 CLI you wire into agent hooks and use to inspect state.
 
-Status: daemon + CLI are working end-to-end (tested: spawn → OSC-9 parse →
-live SSE push → `list`/`watch` output). Tray/sidebar UI is not built yet —
-see "Next steps" below.
+Status: daemon + CLI are working end-to-end, verified on a real Windows 11
++ WSL2 machine (spawn → OSC-9 parse → live SSE push → `list`/`watch`
+output, `wmux pane`'s full `wt.exe`/`wsl.exe` quoting chain, both hook
+commands). Tray/sidebar UI is not built yet — see "Next steps" below.
+
+**Note:** `--distro` (for `wmux new`/`wmux pane`) defaults to `"Ubuntu"`
+if omitted — if your WSL distro is named something else (check with
+`wsl -l -v`), pass `--distro <name>` explicitly or the spawned process
+exits immediately with no useful error.
 
 ## Layout
 
@@ -29,22 +35,48 @@ run it from Task Scheduler — no console needed since it's headless):
 wmuxd.exe
 ```
 
-Then from any shell, spawn an agent session. On Windows this shells out to
-`wsl.exe -d <distro>`; if you're running the daemon inside WSL2 itself, it
-just execs the command directly:
+**Important:** if your agents (Claude Code / Codex) run inside a WSL2
+distro — the common case — run the Linux build of `wmuxd`/`wmux` (in
+`bin/linux-amd64/`) *inside that distro* instead of the Windows build on
+the host. See "Wiring real agent hooks" below for why.
+
+### Headless sessions (`wmux new`)
+
+Good for background/batch runs where you don't need to type into the
+agent — spawns the process with no TTY, piping its output through the
+daemon's OSC watcher:
 
 ```
-wmux new --id my-project --cwd /home/you/my-project --cmd "claude" --distro Ubuntu
+wmux new --id my-project --cwd /home/you/my-project --cmd "codex exec ..." --distro Ubuntu
 wmux list
 wmux watch
 ```
 
-Wire the notify CLI into your agent's hook config, e.g. for Claude Code's
-`on-idle`/notification hook, point it at:
+### Interactive sessions (`wmux attach` + `wmux pane`)
+
+For anything you actually want to type into — `claude`, `codex`, a normal
+interactive session — `wmux new` won't work: it has no TTY, so readline,
+colors, and prompts all break, and there's no way to send it input at all.
+
+`wmux attach` runs a command with full TTY passthrough (real
+stdin/stdout/stderr) while still registering with the daemon for tracking:
 
 ```
-wmux notify "Claude is waiting for your input" --session my-project
+wmux attach --id my-project --cwd /home/you/my-project -- claude
 ```
+
+`wmux pane` (run from PowerShell, not from inside WSL) opens a new
+Windows Terminal tab or split pane that runs `wmux attach` inside a WSL
+distro for you:
+
+```powershell
+wmux.exe pane --id my-project --cwd /home/you/my-project --distro Ubuntu --cmd claude --split v
+```
+
+`--split` accepts `tab` (default), `v` (vertical split), or `h`
+(horizontal split). This only shells out to `wt.exe -w 0 ...` — it doesn't
+talk to the daemon itself; that happens once `wmux attach` starts running
+inside the pane it just opened.
 
 ## Building from source
 
@@ -119,10 +151,17 @@ hook wiring itself, WSL-resident is the path of least resistance.
 
 If you do want a single Windows-side daemon that both PowerShell and
 WSL-resident hooks can reach, you'll need WSL2's mirrored networking mode
-(current default on recent Windows/WSL builds) so `127.0.0.1` on the Windows
-host and inside WSL refer to the same loopback — otherwise you'd need to
-target the WSL virtual adapter's IP from the Windows side instead of
-`127.0.0.1`.
+so `127.0.0.1` on the Windows host and inside WSL refer to the same
+loopback — otherwise you'd need to target the WSL virtual adapter's IP
+from the Windows side instead of `127.0.0.1`. **Verified on a real
+Windows 11 + WSL2 machine without a `.wslconfig` (mirrored mode off, the
+actual default):** WSL → Windows over `127.0.0.1` does **not** work
+(connection refused), so a hook running inside WSL cannot reach
+`wmuxd.exe` on the Windows side without mirrored mode. Windows → WSL over
+`127.0.0.1` **does** work out of the box (WSL2's built-in localhost
+forwarding, unrelated to mirrored mode) — so PowerShell-side orchestration
+via `wmux pane`/`wmux new --distro ...` can always reach a WSL-resident
+daemon, it's only the hook direction that needs mirrored mode.
 
 ## Next steps
 
@@ -130,9 +169,19 @@ target the WSL virtual adapter's IP from the Windows side instead of
    `wmux hook-codex` (JSON as final arg) are implemented and tested against
    both agents' actual current payload formats. See "Wiring real agent
    hooks" above.
-2. **`wt.exe` orchestration** — add a `wmux split`/`wmux new-tab` that
-   shells out to `wt.exe` with the right `wsl.exe -d <distro> -- wmux
-   attach <id>` args, so spawning a session also opens the visible pane.
+2. ~~**`wt.exe` orchestration**~~ — done and verified end-to-end on real
+   Windows + WSL2: `wmux attach` (real TTY passthrough + daemon
+   registration) and `wmux pane` (shells out to `wt.exe -w 0
+   new-tab`/`split-pane` running `wmux attach` inside a WSL distro).
+   Fixed a real quoting-chain bug found during that verification: `wt.exe`
+   re-tokenizes its trailing commandline and splits on any unescaped `;`
+   (even one nested inside an already-quoted argv token), so a `--cmd`
+   containing a compound shell command used to silently truncate. Fixed by
+   base64-encoding the inner command and piping it through decode+exec
+   with no quote characters at all (`echo <b64>|base64 -d|bash`) — see
+   NOTES.md for the full debugging trail, including a second failed fix
+   attempt (`eval "$(...)"`) that hit a separate embedded-quote mangling
+   issue specific to `wt.exe`'s parser.
 3. **Tray/sidebar UI** — a small Wails or Tauri app subscribing to
    `GET /events` (SSE) and `GET /sessions`, showing a notification badge
    and the sidebar metadata (branch/ports/last note) per session.

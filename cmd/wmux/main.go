@@ -5,11 +5,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/peterkure/wmux/internal/proto"
 )
@@ -31,6 +34,10 @@ func main() {
 		cmdHookCodex(os.Args[2:])
 	case "new":
 		cmdNew(os.Args[2:])
+	case "attach":
+		cmdAttach(os.Args[2:])
+	case "pane":
+		cmdPane(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
 	case "watch":
@@ -46,7 +53,10 @@ func usage() {
   wmux notify <message> --session ID     manually push a notification (testing)
   wmux hook-claude                       Claude Code Notification hook (reads stdin JSON)
   wmux hook-codex --session ID <json>    Codex 'notify' config target (JSON as final arg)
-  wmux new --id ID --cwd PATH --cmd CMD  spawn a new agent session
+  wmux new --id ID --cwd PATH --cmd CMD  spawn a new HEADLESS agent session (no TTY; daemon owns the pipe)
+  wmux attach --id ID --cwd PATH -- CMD  run CMD interactively (real TTY), tracked by the daemon
+  wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split v|h|tab]
+                                          open a new wt.exe pane running 'wmux attach' inside WSL
   wmux list                              list sessions and their state
   wmux watch                             stream notifications as they arrive`)
 }
@@ -179,6 +189,135 @@ func cmdHookCodex(args []string) {
 	}
 
 	pushNotify(sessionID, body, "hook-codex")
+}
+
+// cmdAttach runs a command interactively with full TTY passthrough — real
+// stdin/stdout/stderr, so colors, readline, and prompts all work — while
+// registering with the daemon purely for tracking (branch/ports, and as a
+// target for hook-claude/hook-codex notifications). This is what a wt.exe
+// pane should run directly (see cmdPane), unlike `wmux new`, which pipes
+// output through the daemon and has no TTY at all.
+func cmdAttach(args []string) {
+	fs := newFlagSet("attach")
+	id := fs.String("id", "", "session ID")
+	cwd := fs.String("cwd", ".", "working directory")
+	distro := fs.String("distro", "", "WSL distro name, recorded for daemon metadata only")
+	fs.Parse(args)
+
+	if *id == "" {
+		fmt.Fprintln(os.Stderr, "wmux attach: --id is required")
+		os.Exit(1)
+	}
+	cmdArgs := fs.Args()
+	if len(cmdArgs) == 0 {
+		fmt.Fprintln(os.Stderr, "wmux attach: missing command, e.g. 'wmux attach --id x -- claude'")
+		os.Exit(1)
+	}
+
+	regReq := proto.RegisterSessionRequest{ID: *id, Cwd: *cwd, Distro: *distro}
+	b, _ := json.Marshal(regReq)
+	resp, err := http.Post(daemonAddr+"/sessions/register", "application/json", bytes.NewReader(b))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmux attach: could not reach wmuxd (is it running?): %v\n", err)
+		os.Exit(1)
+	}
+	regBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "wmux attach: daemon returned %s: %s\n", resp.Status, string(regBody))
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd.Dir = *cwd
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	runErr := cmd.Run()
+
+	// os.Exit skips deferred functions, so deregister explicitly on every
+	// exit path rather than relying on defer — a non-zero exit code below
+	// would otherwise silently leave the session marked "running" forever.
+	deregReq := proto.DeregisterSessionRequest{ID: *id}
+	b, _ = json.Marshal(deregReq)
+	if resp, err := http.Post(daemonAddr+"/sessions/deregister", "application/json", bytes.NewReader(b)); err == nil {
+		resp.Body.Close()
+	} else {
+		fmt.Fprintf(os.Stderr, "wmux attach: warning: could not deregister session with wmuxd: %v\n", err)
+	}
+
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "wmux attach: %v\n", runErr)
+		os.Exit(1)
+	}
+}
+
+// cmdPane opens a new Windows Terminal tab or split pane that runs `wmux
+// attach` inside a WSL distro. This only shells out to wt.exe — it never
+// talks to the daemon itself; the daemon interaction happens once `wmux
+// attach` starts running inside the new pane. Run this from PowerShell,
+// not from inside WSL (wt.exe isn't reachable from within a distro).
+func cmdPane(args []string) {
+	fs := newFlagSet("pane")
+	id := fs.String("id", "", "session ID")
+	cwd := fs.String("cwd", "", "working directory inside the WSL distro")
+	distro := fs.String("distro", "Ubuntu", "WSL distro name")
+	command := fs.String("cmd", "", "command to run interactively, e.g. 'claude'")
+	split := fs.String("split", "tab", "'tab', 'v' (vertical split), or 'h' (horizontal split)")
+	fs.Parse(args)
+
+	if *id == "" || *cwd == "" || *command == "" {
+		fmt.Fprintln(os.Stderr, "wmux pane: --id, --cwd, and --cmd are required")
+		os.Exit(1)
+	}
+
+	// Runs inside the distro: exec wmux attach with a real TTY, tracked
+	// under --id, which then execs the actual agent command interactively.
+	innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
+		shellQuote(*id), shellQuote(*cwd), shellQuote(*distro), *command)
+
+	// wt.exe's own command-line parser splits on unescaped ';' to chain
+	// multiple wt subcommands ("wt new-tab ; split-pane ; ..."), so any
+	// semicolon anywhere in --cmd (e.g. a compound shell command like
+	// "foo; bar") silently truncates everything after it before it ever
+	// reaches wsl.exe. Base64-encode the whole inner command so wt.exe only
+	// ever sees one opaque token. Also avoid embedded double quotes/`eval
+	// "$(...)"` here: verified empirically that wt.exe's re-tokenizing of
+	// the trailing commandline mangles a token containing literal `"`
+	// characters (likely a quoting-convention mismatch between Go's argv
+	// escaping and wt.exe's own parser), even though the same payload runs
+	// fine via wsl.exe/bash directly. A pure pipe with no quote characters
+	// at all (`echo B64|base64 -d|bash`) survives intact.
+	encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
+	execCmd := fmt.Sprintf("echo %s|base64 -d|bash", encoded)
+
+	wtArgs := []string{"-w", "0"}
+	switch *split {
+	case "v":
+		wtArgs = append(wtArgs, "split-pane", "-V")
+	case "h":
+		wtArgs = append(wtArgs, "split-pane", "-H")
+	default:
+		wtArgs = append(wtArgs, "new-tab")
+	}
+	wtArgs = append(wtArgs, "--title", *id, "wsl.exe", "-d", *distro, "--cd", *cwd, "--", "bash", "-lc", execCmd)
+
+	cmd := exec.Command("wt.exe", wtArgs...)
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux pane: could not launch wt.exe (is Windows Terminal installed and on PATH?): %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("opened %s for session %s\n", map[string]string{"v": "vertical split", "h": "horizontal split", "tab": "new tab"}[*split], *id)
+}
+
+// shellQuote wraps a value in single quotes for the bash -lc string built
+// above, escaping any embedded single quotes the POSIX way.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func cmdNew(args []string) {

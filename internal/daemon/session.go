@@ -115,13 +115,62 @@ func buildCommand(cwd, distro, command string) *exec.Cmd {
 	return cmd
 }
 
+// Register creates a session entry for "attach mode": the daemon doesn't
+// own or pipe the process (see Spawn for that) — the caller (wmux attach)
+// runs the real agent command with a full TTY passthrough itself, and just
+// asks the daemon to track metadata (branch/ports) and accept notify events
+// under this ID. Used when the actual interactive terminal needs to stay
+// attached to a real console/pty rather than a daemon-owned pipe.
+func (d *Daemon) Register(id, cwd, distro string) (*Session, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if existing, exists := d.sessions[id]; exists {
+		existing.mu.Lock()
+		stillRunning := existing.running
+		existing.mu.Unlock()
+		if stillRunning {
+			return nil, fmt.Errorf("session %q is already running", id)
+		}
+		// existing entry has exited — fall through and replace it, so the
+		// same session ID can be reused across restarts of the same agent.
+	}
+
+	sess := &Session{ID: id, Cwd: cwd, Distro: distro, running: true}
+	d.sessions[id] = sess
+
+	go d.pollMetadata(sess)
+
+	return sess, nil
+}
+
+// Deregister marks a registered session as no longer running. It doesn't
+// remove the entry — `wmux list` still shows its last known state, same as
+// a Spawn-owned session after its process exits.
+func (d *Daemon) Deregister(id string) error {
+	d.mu.RLock()
+	sess, ok := d.sessions[id]
+	d.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+	return nil
+}
 // Spawn starts a new agent session and begins watching its combined
 // stdout/stderr stream for notification escape sequences.
 func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	d.mu.Lock()
-	if _, exists := d.sessions[req.ID]; exists {
-		d.mu.Unlock()
-		return nil, fmt.Errorf("session %q already exists", req.ID)
+	if existing, exists := d.sessions[req.ID]; exists {
+		existing.mu.Lock()
+		stillRunning := existing.running
+		existing.mu.Unlock()
+		if stillRunning {
+			d.mu.Unlock()
+			return nil, fmt.Errorf("session %q is already running", req.ID)
+		}
+		// existing entry has exited — fall through and replace it below.
 	}
 	d.mu.Unlock()
 
