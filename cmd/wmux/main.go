@@ -265,7 +265,7 @@ func cmdPane(args []string) {
 	fs := newFlagSet("pane")
 	id := fs.String("id", "", "session ID")
 	cwd := fs.String("cwd", "", "working directory inside the WSL distro")
-	distro := fs.String("distro", "Ubuntu", "WSL distro name")
+	distro := fs.String("distro", "", "WSL distro name (defaults to your system's default WSL distro if omitted)")
 	command := fs.String("cmd", "", "command to run interactively, e.g. 'claude'")
 	split := fs.String("split", "tab", "'tab', 'v' (vertical split), or 'h' (horizontal split)")
 	fs.Parse(args)
@@ -304,7 +304,11 @@ func cmdPane(args []string) {
 	default:
 		wtArgs = append(wtArgs, "new-tab")
 	}
-	wtArgs = append(wtArgs, "--title", *id, "wsl.exe", "-d", *distro, "--cd", *cwd, "--", "bash", "-lc", execCmd)
+	wtArgs = append(wtArgs, "--title", *id, "wsl.exe")
+	if *distro != "" {
+		wtArgs = append(wtArgs, "-d", *distro)
+	}
+	wtArgs = append(wtArgs, "--cd", *cwd, "--", "bash", "-lc", execCmd)
 
 	cmd := exec.Command("wt.exe", wtArgs...)
 	if err := cmd.Start(); err != nil {

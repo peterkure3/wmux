@@ -98,17 +98,27 @@ func (d *Daemon) List() []proto.SessionInfo {
 	return out
 }
 
+// wslArgs builds the leading wsl.exe argv for a given distro, omitting
+// -d entirely when distro is empty so wsl.exe falls back to whatever the
+// user actually configured as their system default distro (`wsl.exe
+// --status`) instead of us guessing a name — "Ubuntu" is a common default
+// but by no means universal, and guessing wrong makes every session exit
+// instantly with no useful error.
+func wslArgs(distro string) []string {
+	if distro == "" {
+		return nil
+	}
+	return []string{"-d", distro}
+}
+
 // buildCommand constructs the process to run for a session. On Windows,
 // agent sessions run inside a WSL2 distro so the fleet-parity story with
 // Linux boxes holds; on any other OS (used for local dev/testing of this
 // daemon itself) it runs the command directly in a login shell.
 func buildCommand(cwd, distro, command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
-		d := distro
-		if d == "" {
-			d = "Ubuntu"
-		}
-		return exec.Command("wsl.exe", "-d", d, "--cd", cwd, "--", "bash", "-lc", command)
+		args := append(wslArgs(distro), "--cd", cwd, "--", "bash", "-lc", command)
+		return exec.Command("wsl.exe", args...)
 	}
 	cmd := exec.Command("bash", "-lc", command)
 	cmd.Dir = cwd
@@ -286,11 +296,8 @@ func (d *Daemon) pollMetadata(sess *Session) {
 func gitBranch(cwd, distro string) string {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		d := distro
-		if d == "" {
-			d = "Ubuntu"
-		}
-		cmd = exec.Command("wsl.exe", "-d", d, "--", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		args := append(wslArgs(distro), "--", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		cmd = exec.Command("wsl.exe", args...)
 	} else {
 		cmd = exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	}
@@ -309,11 +316,8 @@ func gitBranch(cwd, distro string) string {
 func listeningPorts(cwd, distro string) []int {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		d := distro
-		if d == "" {
-			d = "Ubuntu"
-		}
-		cmd = exec.Command("wsl.exe", "-d", d, "--", "ss", "-ltn")
+		args := append(wslArgs(distro), "--", "ss", "-ltn")
+		cmd = exec.Command("wsl.exe", args...)
 	} else {
 		cmd = exec.Command("ss", "-ltn")
 	}

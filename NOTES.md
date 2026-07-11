@@ -146,6 +146,17 @@ assumed from training data):
     semicolon-heavy compound command and the common single-command case
     (`claude`, `codex`, etc.).
 
+**Follow-up fix (2026-07-11):** `--distro` used to default to the
+hardcoded string `"Ubuntu"` whenever omitted, in `buildCommand`,
+`gitBranch`, `listeningPorts` (`internal/daemon/session.go`) and
+`cmdPane` (`cmd/wmux/main.go`) — which is exactly what caused `test1`/
+`test2`/`test3` above to fail silently, since this machine's actual
+distro is `archlinux`. Fixed by omitting `-d <name>` from the `wsl.exe`
+invocation entirely when `--distro` is empty, letting `wsl.exe` fall back
+to the user's real configured default distro instead of a guessed name.
+Verified: `wmux new` with no `--distro` flag now correctly reaches
+`archlinux` and completes the full spawn → notify → exit cycle.
+
 **Still not tested:**
 
 - Real Claude Code / Codex hook wiring end-to-end with a live agent

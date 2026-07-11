@@ -11,10 +11,11 @@ Status: daemon + CLI are working end-to-end, verified on a real Windows 11
 output, `wmux pane`'s full `wt.exe`/`wsl.exe` quoting chain, both hook
 commands). Tray/sidebar UI is not built yet — see "Next steps" below.
 
-**Note:** `--distro` (for `wmux new`/`wmux pane`) defaults to `"Ubuntu"`
-if omitted — if your WSL distro is named something else (check with
-`wsl -l -v`), pass `--distro <name>` explicitly or the spawned process
-exits immediately with no useful error.
+**Note:** `--distro` (for `wmux new`/`wmux pane`) is optional — if omitted,
+`wsl.exe` uses your system's actual default distro (`wsl.exe --status`),
+same as running `wsl.exe` with no `-d` yourself. Pass `--distro <name>`
+explicitly only if you want a *non-default* distro (check names with
+`wsl -l -v`).
 
 ## Layout
 
@@ -47,7 +48,7 @@ agent — spawns the process with no TTY, piping its output through the
 daemon's OSC watcher:
 
 ```
-wmux new --id my-project --cwd /home/you/my-project --cmd "codex exec ..." --distro Ubuntu
+wmux new --id my-project --cwd /home/you/my-project --cmd "codex exec ..."
 wmux list
 wmux watch
 ```
@@ -70,7 +71,7 @@ Windows Terminal tab or split pane that runs `wmux attach` inside a WSL
 distro for you:
 
 ```powershell
-wmux.exe pane --id my-project --cwd /home/you/my-project --distro Ubuntu --cmd claude --split v
+wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split v
 ```
 
 `--split` accepts `tab` (default), `v` (vertical split), or `h`
