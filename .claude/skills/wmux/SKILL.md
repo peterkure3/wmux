@@ -77,6 +77,16 @@ nohup wmuxd > /tmp/wmuxd.log 2>&1 &
 
 Health check either way: `curl -s http://127.0.0.1:47823/healthz` → `ok`.
 
+Sessions persist across a daemon restart (`~/.wmux/state.json`, override
+with `--state`; each restored session's PID is re-checked for liveness,
+so a session that died while the daemon was down comes back correctly
+marked exited). `wmux list`'s `ports` column is scoped to a session's own
+process tree, not every listening port on the machine — except a
+WSL-targeted `wmux new`/plain `wmux pane` session on a Windows-native
+daemon, where the tracked PID (the `wsl.exe` frontend) has no
+correlation to PIDs inside WSL, so that one case still falls back to
+listing every port inside the distro.
+
 ## Spawning/attaching sessions
 
 `--distro` is **optional** on `wmux new`/`wmux pane` (WSL path only) — if

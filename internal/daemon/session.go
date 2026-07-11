@@ -32,6 +32,7 @@ type Session struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
 	pid      int
+	native   bool
 	branch   string
 	ports    []int
 	lastNote string
@@ -55,13 +56,22 @@ type Daemon struct {
 
 	subMu sync.Mutex
 	subs  map[chan proto.NotifyEvent]struct{}
+
+	// statePath is where sessions are persisted between restarts; empty
+	// disables persistence entirely.
+	statePath string
 }
 
-func New() *Daemon {
-	return &Daemon{
-		sessions: make(map[string]*Session),
-		subs:     make(map[chan proto.NotifyEvent]struct{}),
+// New creates a daemon and restores any sessions found at statePath from a
+// previous run (see load). Pass an empty statePath to disable persistence.
+func New(statePath string) *Daemon {
+	d := &Daemon{
+		sessions:  make(map[string]*Session),
+		subs:      make(map[chan proto.NotifyEvent]struct{}),
+		statePath: statePath,
 	}
+	d.load()
+	return d
 }
 
 func (d *Daemon) Subscribe() chan proto.NotifyEvent {
@@ -133,24 +143,26 @@ func buildCommand(cwd, distro, command string) *exec.Cmd {
 // asks the daemon to track metadata (branch/ports) and accept notify events
 // under this ID. Used when the actual interactive terminal needs to stay
 // attached to a real console/pty rather than a daemon-owned pipe.
-func (d *Daemon) Register(id, cwd, distro string, pid int) (*Session, error) {
+func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Session, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if existing, exists := d.sessions[id]; exists {
 		existing.mu.Lock()
 		stillRunning := existing.running
 		existing.mu.Unlock()
 		if stillRunning {
+			d.mu.Unlock()
 			return nil, fmt.Errorf("session %q is already running", id)
 		}
 		// existing entry has exited — fall through and replace it, so the
 		// same session ID can be reused across restarts of the same agent.
 	}
 
-	sess := &Session{ID: id, Cwd: cwd, Distro: distro, pid: pid, running: true}
+	sess := &Session{ID: id, Cwd: cwd, Distro: distro, pid: pid, native: native, running: true}
 	d.sessions[id] = sess
+	d.mu.Unlock()
 
 	go d.pollMetadata(sess)
+	d.save()
 
 	return sess, nil
 }
@@ -168,6 +180,7 @@ func (d *Daemon) Deregister(id string) error {
 	sess.mu.Lock()
 	sess.running = false
 	sess.mu.Unlock()
+	d.save()
 	return nil
 }
 
@@ -212,6 +225,7 @@ func (d *Daemon) Close(id string) error {
 	sess.mu.Lock()
 	sess.running = false
 	sess.mu.Unlock()
+	d.save()
 
 	return nil
 }
@@ -255,6 +269,7 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	go d.watchOutput(sess, stdout)
 	go d.pollMetadata(sess)
 	go d.waitExit(sess)
+	d.save()
 
 	return sess, nil
 }
@@ -264,6 +279,7 @@ func (d *Daemon) waitExit(sess *Session) {
 	sess.mu.Lock()
 	sess.running = false
 	sess.mu.Unlock()
+	d.save()
 	if err != nil {
 		log.Printf("session %s exited: %v", sess.ID, err)
 	} else {
@@ -326,28 +342,42 @@ func (d *Daemon) pollMetadata(sess *Session) {
 	for range ticker.C {
 		sess.mu.Lock()
 		running := sess.running
+		pid := sess.pid
+		native := sess.native
 		sess.mu.Unlock()
 		if !running {
 			return
 		}
 
-		branch := gitBranch(sess.Cwd, sess.Distro)
-		ports := listeningPorts(sess.Cwd, sess.Distro)
+		branch := gitBranch(sess.Cwd, sess.Distro, native)
+		ports := listeningPorts(sess.Distro, pid, native)
 
 		sess.mu.Lock()
 		sess.branch = branch
 		sess.ports = ports
 		sess.mu.Unlock()
+		d.save()
 	}
 }
 
-func gitBranch(cwd, distro string) string {
+// runsDirectly reports whether a session's own process (and thus its git
+// checkout and any ports it opens) lives in the daemon's own process/OS
+// namespace, as opposed to inside a WSL distro the daemon has to shell
+// into. True for: any session on a non-Windows (i.e. WSL-resident) daemon,
+// and native Windows sessions on a Windows-native daemon. False for:
+// WSL-targeted sessions on a Windows-native daemon (the default `wmux
+// new`/plain `wmux pane` case).
+func runsDirectly(native bool) bool {
+	return runtime.GOOS != "windows" || native
+}
+
+func gitBranch(cwd, distro string, native bool) string {
 	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	if runsDirectly(native) {
+		cmd = exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	} else {
 		args := append(wslArgs(distro), "--", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 		cmd = exec.Command("wsl.exe", args...)
-	} else {
-		cmd = exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	}
 	out, err := cmd.Output()
 	if err != nil {
@@ -356,20 +386,32 @@ func gitBranch(cwd, distro string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// listeningPorts shells out to `ss -ltn` and returns the local ports the
-// session's working directory's project appears to be listening on. This
-// is intentionally coarse — it lists all listening ports system-wide
-// rather than scoping to the session's process tree, which is a
-// reasonable v1 given most dev setups run one project at a time.
-func listeningPorts(cwd, distro string) []int {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		args := append(wslArgs(distro), "--", "ss", "-ltn")
-		cmd = exec.Command("wsl.exe", args...)
-	} else {
-		cmd = exec.Command("ss", "-ltn")
+// listeningPorts returns the local listening ports opened by a session's
+// own process tree.
+//
+// When the session's process lives in the daemon's own namespace
+// (runsDirectly), this is exact: it walks the real process tree rooted at
+// pid and matches it against the OS's own port->owning-PID data (see
+// portscope.go).
+//
+// When it doesn't — a WSL-targeted session on a Windows-native daemon,
+// which is what plain `wmux new`/`wmux pane` (no --native) always are —
+// pid is the Windows-side wsl.exe frontend's PID, which has no
+// correlation to PIDs inside the WSL distro's own /proc namespace. There
+// is no reliable way to scope to just this session's processes in that
+// case, so this intentionally falls back to every listening port inside
+// the distro (the original, pre-scoping behavior) rather than silently
+// showing nothing.
+func listeningPorts(distro string, pid int, native bool) []int {
+	if runsDirectly(native) {
+		if pid == 0 {
+			return nil
+		}
+		return listeningPortsForTree(processTree(pid))
 	}
-	out, err := cmd.Output()
+
+	args := append(wslArgs(distro), "--", "ss", "-ltn")
+	out, err := exec.Command("wsl.exe", args...).Output()
 	if err != nil {
 		return nil
 	}

@@ -246,6 +246,78 @@ just marked exited in `wmux list`. Also verified closing an
 already-exited or nonexistent session ID returns a clean 404, not a
 crash or hang.
 
+**Follow-up features (2026-07-11): port scoping + session persistence.**
+Both from README's original "Next steps" list, implemented together
+since port scoping needed the same "is this session native or WSL"
+tracking persistence's restore path also benefits from.
+
+- **Native session tracking.** Found a real latent bug while designing
+  port scoping: `gitBranch`/`listeningPorts` branched purely on the
+  *daemon's own* `runtime.GOOS`, never on whether the specific session
+  being polled was itself native-Windows or WSL-targeted. A Windows-native
+  daemon therefore always shelled into WSL for metadata polling — correct
+  for `wmux new` (always WSL-targeted by design) and for `wmux attach`
+  sessions actually run inside WSL, but silently wrong for a *native*
+  `wmux attach`/`wmux pane --native` session, whose `cwd` is a real
+  Windows path that means nothing inside a WSL distro. Fixed by adding
+  `Native bool` to `RegisterSessionRequest`, set automatically by `wmux
+  attach` from its own `runtime.GOOS` (no new user-facing flag — nativity
+  is inherent to which `wmux` binary is running, not something to ask the
+  user to specify). `Spawn`-mode sessions never set it (defaults `false`),
+  correctly preserving the always-WSL-targeted `wmux new` behavior.
+  Verified: a native session's git branch against a real Windows path
+  (`D:\Github\wmux`) now resolves correctly (`main`) via native `git.exe`,
+  where it silently failed before.
+
+- **Port scoping.** New `internal/daemon/portscope.go`: `processTree(pid)`
+  walks the real process tree in the daemon's own namespace (`ps -eo
+  pid,ppid` + BFS on Unix/WSL, `Get-CimInstance Win32_Process` +BFS on
+  native Windows), and `listeningPortsForTree` cross-references it against
+  the platform's port→PID data (`ss -ltnp` / `Get-NetTCPConnection
+  -OwningProcess`). Only attempted when the session's PID is meaningful in
+  the daemon's own namespace (`runsDirectly`: true for any session on a
+  WSL-resident/Linux daemon, and for *native* sessions on a Windows-native
+  daemon) — a WSL-targeted `wmux new`/plain `wmux pane` session on a
+  Windows-native daemon has a `pid` that's the Windows-side `wsl.exe`
+  frontend process, which has zero correlation to PIDs inside the WSL
+  distro's own `/proc`, so scoping is skipped entirely for that specific
+  combination and it falls back to the old system-wide `ss -ltn` listing
+  rather than either crashing or silently showing nothing.
+
+  Verified on both platforms with a listener bound to one specific,
+  distinctive port (18342 native Windows via `TcpListener`, 28471 WSL via
+  `python3 -m http.server`): `wmux list` showed exactly that one port in
+  both cases, not the 5-7 system ports (`53`, `5355`, the daemon's own
+  `47823`, etc.) the old unscoped code always included. Hit one real
+  debugging trap while verifying this: after rebuilding, forgot to
+  reinstall the updated Linux binary to `/usr/local/bin` inside WSL before
+  testing, so the first WSL test ran against a stale build and appeared to
+  show the bug still present (full unscoped port list) — always diff the
+  installed binary's hash against the fresh build before trusting a
+  failed verification.
+
+- **Session persistence.** New `internal/daemon/persist.go`. `Daemon.New`
+  now takes a `statePath` (default `~/.wmux/state.json` via
+  `DefaultStatePath()`, overridable with `wmuxd --state`, empty disables
+  it); `save()` snapshots all sessions to disk (write-to-temp +rename, so
+  a crash mid-write can't corrupt the file) after every lifecycle
+  transition and once per `pollMetadata` tick; `load()` restores sessions
+  at startup and re-checks each one's PID for actual liveness via a new
+  `processAlive` helper (`tasklist`/`ps -p`) rather than trusting the
+  persisted `running` flag blindly. Verified all three real scenarios:
+  (1) daemon killed and restarted while the tracked process is still
+  alive — session restores as `running: true`, branch/port polling
+  resumes; (2) tracked process killed *independently* of the daemon
+  (bypassing `wmux close`, so the on-disk snapshot still says `running:
+  true`) before a restart — session correctly restores as `running:
+  false` via the liveness re-check, not left incorrectly `running`;
+  (3) normal `wmux close` then restart — restores as `exited`, as
+  expected. A restored Spawn-mode session loses OSC notify parsing (the
+  daemon no longer holds its original stdout pipe after a restart) and
+  clean `cmd.Wait()` reaping (Go can only `Wait()` a process it actually
+  `Start()`ed itself) — `pollMetadata`'s per-tick liveness check is what
+  eventually notices such a session exited, in place of those.
+
 **Still not tested:**
 
 - Real Codex hook wiring end-to-end with a live Codex invocation (Codex

@@ -94,6 +94,8 @@ curl.exe -s http://127.0.0.1:47823/healthz
 
 You need \texttt{wmuxd} running before anything else in this manual will work.
 
+\textbf{Sessions survive a daemon restart.} \texttt{wmuxd} snapshots session state to \texttt{\textasciitilde/.wmux/state.json} (override with \texttt{wmuxd --state <path>}, or \texttt{--state ""} to disable) after every change, and restores it on startup -- each restored session's process is re-checked so a session that actually died while the daemon was down comes back correctly marked exited, not stuck showing running.
+
 \section{Wiring the Notification Hook}
 
 This is what makes Claude Code push a message into wmux whenever it's waiting on you, instead of you having to notice a quiet terminal.
@@ -228,6 +230,8 @@ Example output:
 my-project             running    /home/you/my-project   branch=main   ports=[3000] note="Claude is waiting for your input"
 nightly-refactor       exited     /home/you/my-project   branch=main   ports=[]     note=""
 \end{lstlisting}
+
+\texttt{ports} is scoped to the session's own process tree, not every listening port on the machine -- with one exception: a WSL-targeted \texttt{wmux new}/plain \texttt{wmux pane} session on a \textbf{Windows-native} daemon falls back to listing every port inside the distro, since that session's tracked PID (the Windows-side \texttt{wsl.exe} frontend) has no correlation to PIDs inside WSL's own namespace.
 
 \subsection{Live Feed}
 

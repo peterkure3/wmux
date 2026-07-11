@@ -226,12 +226,46 @@ daemon, it's only the hook direction that needs mirrored mode.
    NOTES.md for the full debugging trail, including a second failed fix
    attempt (`eval "$(...)"`) that hit a separate embedded-quote mangling
    issue specific to `wt.exe`'s parser.
-3. **Tray/sidebar UI** — a small Wails or Tauri app subscribing to
+3. ~~**`wmux pane --native`**~~ — done: runs the command directly on
+   Windows via `powershell.exe -EncodedCommand`, no WSL, for agents that
+   are native Windows installs. Verified against a real `claude.exe`.
+4. ~~**`wmux close`**~~ — done: kills a session's tracked process
+   (daemon-owned for `wmux new`, registered PID for `wmux attach`/`wmux
+   pane`). Verified end-to-end for both session types via real
+   process-list checks. Does not close the `wt.exe` pane/tab itself —
+   confirmed there's no external API for that; left as a known,
+   permanent limitation rather than faked with risky UI automation.
+5. **Tray/sidebar UI** — a small Wails or Tauri app subscribing to
    `GET /events` (SSE) and `GET /sessions`, showing a notification badge
    and the sidebar metadata (branch/ports/last note) per session.
-4. **Port scoping** — `listeningPorts` currently lists all system-wide
-   listening ports rather than scoping to the session's process tree;
-   fine for one-project-at-a-time dev setups, worth tightening later.
-5. **Session persistence** — daemon currently loses all session state on
-   restart; cmux persists a snapshot to disk for session restore, worth
-   doing the same here once the core loop is solid.
+6. ~~**Port scoping**~~ — done, and fixed a real latent bug found while
+   implementing it: a **native** Windows session's git branch/port
+   polling was always shelling into WSL regardless (the daemon only ever
+   checked its own `runtime.GOOS`, never whether *this particular
+   session* was native or WSL-targeted), so branch lookups against a
+   Windows path like `D:\...` were silently broken. Fixed by having
+   `wmux attach` report its own nativity (from its own `runtime.GOOS`) at
+   register time. `wmux list` now shows only the ports
+   actually opened by a session's own process tree, not every listening
+   port on the machine. Walks the real process tree (via
+   `Get-CimInstance Win32_Process` on native Windows sessions, `/proc`
+   via `ps -eo pid,ppid` on WSL/Linux sessions) and cross-references it
+   against the platform's own port→owning-PID data
+   (`Get-NetTCPConnection -OwningProcess` / `ss -ltnp`). Verified on both
+   platforms: a session opening exactly one port shows exactly that port,
+   not the dozen-plus system-wide ports it used to. One known gap: a
+   `wmux new`/plain `wmux pane` session on a **Windows-native** daemon is
+   always WSL-targeted via `wsl.exe`, whose Windows-side PID has no
+   correlation to PIDs inside the WSL distro's own namespace — scoping
+   isn't attempted there and it falls back to listing every port inside
+   the distro (the old behavior), same as before this change.
+7. ~~**Session persistence**~~ — done: `wmuxd` now snapshots session
+   state to `~/.wmux/state.json` (override with `--state`) after every
+   lifecycle change, and restores it on startup. Each restored session's
+   PID is re-checked for liveness, so a session whose process died while
+   the daemon was down comes back correctly marked `exited`, not
+   `running`. Verified all three cases: daemon restart with the process
+   still alive (restores as running, metadata polling resumes), daemon
+   restart after the process died independently (restores as exited,
+   with no `wmux close`/deregister call involved), and a normal
+   close-then-restart.

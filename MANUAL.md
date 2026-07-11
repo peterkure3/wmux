@@ -77,6 +77,13 @@ curl.exe -s http://127.0.0.1:47823/healthz
 
 You need `wmuxd` running before anything else in this manual will work.
 
+**Sessions survive a daemon restart.** `wmuxd` snapshots session state to
+`~/.wmux/state.json` (override with `wmuxd --state <path>`, or
+`--state ""` to disable) after every change, and restores it on startup —
+each restored session's process is re-checked so a session that actually
+died while the daemon was down comes back correctly marked exited, not
+stuck showing running.
+
 ## Wiring the notification hook
 
 This is what makes Claude Code push a message into wmux whenever it's
@@ -208,6 +215,13 @@ Example output:
 my-project            running    /home/you/my-project   branch=main   ports=[3000] note="Claude is waiting for your input"
 nightly-refactor       exited     /home/you/my-project   branch=main   ports=[]     note=""
 ```
+
+`ports` is scoped to the session's own process tree, not every listening
+port on the machine — with one exception: a WSL-targeted `wmux new`/plain
+`wmux pane` session on a **Windows-native** daemon falls back to listing
+every port inside the distro, since that session's tracked PID (the
+Windows-side `wsl.exe` frontend) has no correlation to PIDs inside WSL's
+own namespace.
 
 **Live feed** — streams notifications as they happen, useful to leave
 running in a spare terminal:

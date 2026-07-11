@@ -36,12 +36,17 @@ type NewSessionRequest struct {
 // process (the caller keeps a real TTY attached to the agent directly). PID
 // is the attached process's own process ID, in the daemon's local process
 // namespace — it lets `wmux close` terminate a registered (not just
-// daemon-spawned) session.
+// daemon-spawned) session. Native is true when the attached command runs
+// directly on the same OS as wmux attach's own process (set from that
+// process's own runtime.GOOS, not user-supplied) — it tells a
+// Windows-native daemon whether to poll this session's git branch/ports
+// directly or by shelling into WSL.
 type RegisterSessionRequest struct {
 	ID     string `json:"id"`
 	Cwd    string `json:"cwd"`
 	Distro string `json:"distro,omitempty"`
 	PID    int    `json:"pid,omitempty"`
+	Native bool   `json:"native,omitempty"`
 }
 
 // DeregisterSessionRequest is the body for POST /sessions/deregister.

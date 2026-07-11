@@ -12,9 +12,10 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:47823", "address for the local HTTP API")
+	statePath := flag.String("state", daemon.DefaultStatePath(), "path to persist session state across restarts (empty to disable)")
 	flag.Parse()
 
-	d := daemon.New()
+	d := daemon.New(*statePath)
 	if err := d.Serve(*addr); err != nil {
 		log.Fatalf("wmuxd: %v", err)
 	}

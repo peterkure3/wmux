@@ -64,7 +64,7 @@ func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	sess, err := d.Register(req.ID, req.Cwd, req.Distro, req.PID)
+	sess, err := d.Register(req.ID, req.Cwd, req.Distro, req.PID, req.Native)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

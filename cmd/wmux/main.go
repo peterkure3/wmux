@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"unicode/utf16"
 
@@ -234,7 +235,10 @@ func cmdAttach(args []string) {
 
 	// Register only after Start() so the real PID can be included — this is
 	// what `wmux close` later uses to kill this exact process.
-	regReq := proto.RegisterSessionRequest{ID: *id, Cwd: *cwd, Distro: *distro, PID: cmd.Process.Pid}
+	regReq := proto.RegisterSessionRequest{
+		ID: *id, Cwd: *cwd, Distro: *distro, PID: cmd.Process.Pid,
+		Native: runtime.GOOS == "windows",
+	}
 	b, _ := json.Marshal(regReq)
 	resp, err := http.Post(daemonAddr+"/sessions/register", "application/json", bytes.NewReader(b))
 	if err != nil {
