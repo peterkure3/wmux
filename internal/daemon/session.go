@@ -57,6 +57,10 @@ type Daemon struct {
 	subMu sync.Mutex
 	subs  map[chan proto.NotifyEvent]struct{}
 
+	// panes holds pending pane specs (see panes.go) — the handshake between
+	// `wmux pane` and the `wmux pane-exec` process inside the new wt.exe pane.
+	panes paneSpecs
+
 	// statePath is where sessions are persisted between restarts; empty
 	// disables persistence entirely.
 	statePath string
@@ -187,10 +191,9 @@ func (d *Daemon) Deregister(id string) error {
 // Close terminates a session's underlying process — the daemon-owned
 // process for a `wmux new` session, or the registered PID for a `wmux
 // attach`/`wmux pane` session. This is what `wmux close` calls: it ends
-// the agent (and, transitively, whatever wrapping shell wt.exe is hosting
-// for a pane-opened session), even though wmuxd itself has no way to make
-// Windows Terminal remove the now-inert pane/tab from its own UI — that
-// part still needs closing by hand.
+// the agent, and for a `wmux pane` session the pane's process chain
+// unwinds with it, at which point the "wmux" WT profile's
+// closeOnExit:"always" removes the pane from the layout entirely.
 func (d *Daemon) Close(id string) error {
 	d.mu.RLock()
 	sess, ok := d.sessions[id]

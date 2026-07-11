@@ -271,7 +271,16 @@ wmux close --id my-project
 
 Kills the session's tracked process -- the daemon-owned process for \texttt{wmux new}, or the registered PID for \texttt{wmux attach}/\texttt{wmux pane}. Verified: this kills the real OS process (confirmed via process list, not just daemon state) and deregisters the session immediately.
 
-\textbf{If you opened it via \texttt{wmux pane}:} ending the process (whether by exiting the agent yourself or via \texttt{wmux close}) is enough to end the \emph{wmux session} cleanly (\texttt{wmux list} will show \texttt{running: false}), but it does \textbf{not} close the \texttt{wt.exe} pane/tab itself. Verified: even a clean zero exit code leaves an inert, already-closed pane sitting in Windows Terminal's layout -- this isn't about exit codes or timing, \texttt{wt.exe} just has no command-line API to remove an existing pane from outside. You'll need to close that pane/tab by hand (its own close button, or Ctrl+Shift+W with it focused).
+\textbf{If you opened it via \texttt{wmux pane}:} ending the process (whether by exiting the agent yourself or via \texttt{wmux close}) also removes the pane itself from Windows Terminal's layout -- \texttt{wmux pane} opens every pane on an auto-installed \texttt{wmux} WT profile with \texttt{closeOnExit: "always"}, whose fixed commandline (\texttt{wmux pane-exec}) owns the pane's whole process chain. (Panes opened by pre-profile wmux versions passed the commandline straight through \texttt{wt.exe}, which never honors \texttt{closeOnExit} -- those still linger as inert panes and can only be closed by hand.)
+
+\section{Switching Focus}
+
+\begin{lstlisting}
+wmux focus --id my-project     # focus that session's pane/tab
+wmux focus --dir right         # move focus one pane right
+\end{lstlisting}
+
+Run from the Windows side, like \texttt{wmux pane}. \texttt{--id} finds the pane by its title -- every \texttt{wmux pane} keeps the session ID as its fixed pane title -- via UI Automation: it foregrounds the right Windows Terminal window, selects the tab, and puts keyboard focus on the exact pane, including one half of a split. \texttt{--dir} is relative movement (\texttt{left}/\texttt{right}/\texttt{up}/\texttt{down}) within the most recently used WT window -- handy for an agent that just opened a pane next to itself.
 
 \section{Troubleshooting}
 
@@ -300,8 +309,16 @@ Forgot \texttt{--session} &
 Add \texttt{--session <id>} \\
 \hline
 \texttt{wmux close --id X} succeeds but the pane/tab is still visible &
-Expected -- \texttt{wt.exe} has no API to remove an existing pane from outside &
-Close the pane/tab by hand \\
+Pane opened by a pre-profile wmux version (commandline passed through \texttt{wt.exe} never honors \texttt{closeOnExit}) &
+Close that pane by hand; panes opened by current \texttt{wmux pane} close themselves \\
+\hline
+\texttt{wmux pane} opens a plain shell instead of the agent &
+The \texttt{wmux} WT profile fragment wasn't imported yet (first-ever run) &
+Retry \texttt{wmux pane}; if it persists, restart Windows Terminal once \\
+\hline
+\texttt{wmux focus --id X} says not found &
+Pane title no longer matches the session ID (pane opened by an old wmux version, or session not opened via \texttt{wmux pane}) &
+Use \texttt{wmux focus --dir} instead, or reopen the pane with current \texttt{wmux pane} \\
 \hline
 \end{tabular}
 

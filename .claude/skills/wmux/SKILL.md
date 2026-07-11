@@ -3,10 +3,11 @@ name: wmux
 description: >
   Operate wmux, the Windows notification/session daemon for AI coding agents
   (Claude Code, Codex) — either running natively on Windows or inside WSL2.
-  Covers starting wmuxd, spawning or attaching sessions, opening wt.exe
-  panes (WSL only), wiring Claude Code/Codex notification hooks, and
-  diagnosing WSL2 networking/distro issues. Use when the user wants to
-  start/stop wmuxd, run wmux new/attach/pane/list/watch, or configure agent
+  Covers starting wmuxd, spawning or attaching sessions, opening
+  self-closing wt.exe panes (WSL or native), switching pane focus, wiring
+  Claude Code/Codex notification hooks, and diagnosing WSL2
+  networking/distro issues. Use when the user wants to start/stop wmuxd,
+  run wmux new/attach/pane/focus/close/list/watch, or configure agent
   hooks for wmux.
 ---
 
@@ -198,6 +199,43 @@ before any `[tables]`):
 notify = ["wmux", "hook-codex", "--session", "my-project"]
 ```
 
+## How `wmux pane` works — the profile flow
+
+`wmux pane` does not pass a commandline through `wt.exe`. It (1)
+auto-installs a `wmux` Windows Terminal profile as a settings fragment
+(`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\wmux\wmux.json` —
+never edits the user's settings.json content; a running WT imports it
+live after wmux touches settings.json's mtime), (2) files the session
+spec with the daemon (`POST /panes/pending`), and (3) opens the pane
+with `--profile wmux --title <id>` and **no commandline**. The profile's
+fixed commandline `wmux pane-exec` runs inside the pane, reads the
+session ID from its own console title, claims the spec
+(`POST /panes/claim`), and runs `wmux attach` as before.
+
+Why: a wt.exe pane only honors its profile's `closeOnExit` when running
+the profile's own commandline (verified empirically — a CLI-passed
+commandline always leaves an inert dead pane on exit, any exit code).
+With `closeOnExit: "always"` on the profile, the pane **removes itself**
+from the layout when its process chain dies. The pane keeps the session
+ID as its fixed title (`--suppressApplicationTitle`) — that's also how
+`wmux focus --id` finds it. Consequence: `wmux pane` now requires the
+daemon reachable from the Windows side before it will open anything.
+
+## Switching focus — `wmux focus`
+
+```powershell
+wmux focus --id my-project      # focus that session's pane/tab, any WT window
+wmux focus --dir right          # move focus one pane right in the current window
+```
+
+Windows-side command like `wmux pane` (not from inside WSL). `--id` uses
+UI Automation to foreground the right WT window, select the tab, and put
+keyboard focus on the exact pane (works for split halves too). `--dir`
+(`left`/`right`/`up`/`down`) is relative `wt move-focus` in the most
+recently used window — for an agent calling it from inside a pane that's
+its own window, so "focus the pane I just opened to my right" is
+`wmux focus --dir right`.
+
 ## Stopping a session — `wmux close`
 
 ```
@@ -217,18 +255,16 @@ Exiting the agent yourself (Ctrl+D, `/exit`) works the same way for a
 `wmux attach` session — `wmux close` is for ending one *remotely*,
 without a terminal attached to it.
 
-**`wmux close` does not close the `wt.exe` pane/tab itself** if the
-session was opened via `wmux pane` — Windows Terminal leaves an inert,
-already-closed pane in its layout after the hosted process exits,
-confirmed even on a clean zero exit code (so it's not an exit-code or
-timing thing), and there's no `wt.exe` command-line API to remove an
-existing pane from outside. That part still needs closing by hand (its
-own close button, or Ctrl+Shift+W with it focused) — don't attempt to
-fake this by broadly killing `wt.exe`/`conhost.exe`/`OpenConsole.exe`
-processes by image name; a real machine accumulates many of these across
-unrelated windows/tabs (including ones the user is actively working in),
-and there's no reliable way to tell which belongs to which pane without
-already knowing the specific PID `wmux close` targets.
+For a `wmux pane` session, killing the process chain also removes the
+pane from Windows Terminal's layout (the `wmux` profile's
+`closeOnExit: "always"` — see the profile flow above). Panes opened by
+**pre-profile wmux versions** still linger as inert panes after close —
+that's unfixable from outside (`wt.exe` has no API to remove an existing
+pane); close those by hand (close button, or Ctrl+Shift+W focused), and
+don't attempt to fake it by broadly killing
+`wt.exe`/`conhost.exe`/`OpenConsole.exe` processes by image name — a
+real machine accumulates many of these across unrelated windows/tabs,
+and there's no reliable way to tell which belongs to which pane.
 
 ## Diagnosing problems
 
@@ -248,3 +284,11 @@ already knowing the specific PID `wmux close` targets.
   silently dropped (e.g. `--split` reverting to the `tab` default) → the
   PowerShell 5.1 embedded-double-quote quirk above. Switch `--cmd` to an
   8.3 short path with no spaces/quotes needed.
+- `wmux pane` opens a plain shell instead of the agent → the `wmux` WT
+  profile fragment wasn't imported yet (first-ever run on the machine;
+  normally WT imports it live after wmux touches settings.json). Retry
+  once; if it persists, restart Windows Terminal.
+- `wmux focus --id X` says not found → the pane's title doesn't match
+  the session ID (session not opened via current `wmux pane`, or opened
+  by an old wmux without `--suppressApplicationTitle`). Use
+  `wmux focus --dir` instead, or reopen with current `wmux pane`.

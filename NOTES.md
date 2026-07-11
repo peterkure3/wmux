@@ -318,6 +318,64 @@ tracking persistence's restore path also benefits from.
   `Start()`ed itself) — `pollMetadata`'s per-tick liveness check is what
   eventually notices such a session exited, in place of those.
 
+**Follow-up features (2026-07-11): full pane close + `wmux focus`.**
+Prompted by the goal "switch focus that the agent can use + close the
+pane completely." Key discovery that unlocked pane close, found by
+empirical testing (window-count probe with `wt -w -1`, since WT is
+single-process and process counting tells you nothing): **a wt.exe pane
+only honors its profile's `closeOnExit` setting when it runs the
+profile's own commandline.** Any commandline passed on the wt.exe command
+line leaves the inert dead pane previously documented as unfixable — on
+any exit code, regardless of `closeOnExit`. So the fix is to never pass a
+commandline through wt.exe at all:
+
+- `wmux pane` now auto-installs a WT **settings fragment**
+  (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\wmux\wmux.json`,
+  never touches the user's settings.json content) defining a `wmux`
+  profile: `closeOnExit: "always"`, `suppressApplicationTitle: true`,
+  fixed commandline `<wmux.exe> pane-exec`. A running WT imports a new
+  fragment during any settings reload — touching settings.json's mtime
+  triggers one (verified live on WT 1.24, no restart needed; `wmux pane`
+  does this automatically after writing the fragment).
+- `wmux pane` files the session spec (id/cwd/cmd/distro/native) with the
+  daemon (`POST /panes/pending`), then opens the pane with
+  `--profile wmux --title <id>` and **no commandline**.
+- `wmux pane-exec` (the profile's commandline, runs inside the new pane)
+  reads its own console title — wt.exe's `--title` sets it, verified —
+  claims the spec (`POST /panes/claim`, retries briefly, specs expire
+  after 2 min so a stale one can't start an agent much later), and runs
+  the exact same inner `wmux attach` commands `wmux pane` used to hand
+  to wt.exe (powershell `-EncodedCommand` for native, base64|bash pipe
+  for WSL). Title is the only id channel wt.exe leaves us, and it's
+  race-free (concurrent `wmux pane` calls each claim their own id).
+- Net effect: agent exits or `wmux close` kills it → process chain
+  unwinds → pane removes itself from the layout. Verified end-to-end
+  twice (ping session, split right: registered → `wmux close` → process
+  gone, pane gone).
+
+`wmux focus` — two modes, both verified:
+
+- `--id ID`: UI Automation (via embedded PowerShell): find the element
+  named ID under each `CASCADIA_HOSTING_WINDOW_CLASS` top-level window,
+  `SetForegroundWindow`, select its TabItem, `SetFocus()` its
+  TermControl. Verified keyboard focus lands on the exact TermControl
+  (checked `AutomationElement.FocusedElement` after), including one half
+  of a split. This is why panes keep `--suppressApplicationTitle`: the
+  title IS the session id, for the pane's whole lifetime.
+- `--dir left|right|up|down`: plain `wt -w 0 move-focus <dir>` —
+  relative movement in the most recently used window (which, for an
+  agent calling it from inside a pane, is its own window).
+- Gotcha found while testing: powershell.exe emits CLIXML progress noise
+  on **stderr** ("Preparing modules for first use") — `wmux focus` must
+  read the script's ok/not-found verdict from stdout only, not
+  CombinedOutput.
+
+Also relevant: cmux's own pane architecture (socket API `pane.*`
+`surface.*` commands over a bonsplit split-tree) was reviewed for
+comparison — wmux's wt.exe-sidecar approach can't target/resize/inspect
+arbitrary panes (that ceiling needs owning ConPTY), but self-closing
+panes + focus-by-id cover the agent-workflow essentials.
+
 **Still not tested:**
 
 - Real Codex hook wiring end-to-end with a live Codex invocation (Codex

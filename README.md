@@ -84,9 +84,25 @@ wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe
 ```
 
 `--split` accepts `tab` (default, new tab), `right` (side-by-side split),
-or `down` (stacked split). This only shells out to `wt.exe -w 0 ...` — it
-doesn't talk to the daemon itself; that happens once `wmux attach` starts
-running inside the pane it just opened.
+or `down` (stacked split).
+
+Under the hood, `wmux pane` files a "pane spec" with the daemon and opens
+the pane on a dedicated `wmux` Windows Terminal profile (installed
+automatically as a [settings fragment](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions),
+never touching your own `settings.json` content). The profile's fixed
+commandline, `wmux pane-exec`, claims the spec back by session ID (carried
+via the pane title) and runs `wmux attach` for you. This indirection is
+what makes panes **close themselves**: a `wt.exe` pane only honors its
+profile's `closeOnExit` setting when it runs the profile's own
+commandline, so the profile can use `closeOnExit: "always"` — the pane
+disappears from the layout the moment its process exits or `wmux close`
+kills it, instead of lingering as an inert dead pane (which is what
+happens with a commandline passed straight through `wt.exe`, and there's
+no API to remove such a pane afterwards).
+
+The pane keeps the session ID as its fixed title
+(`--suppressApplicationTitle`), which is also what `wmux focus --id`
+uses to find it.
 
 (Note: `wt.exe`'s own `-V`/`-H` flags name the split after the
 orientation of the *dividing line*, which is the opposite of what most
@@ -102,6 +118,25 @@ characters and can silently drop trailing flags like `--split`. Use the
 8.3 short path instead (no spaces, no quoting needed):
 `(New-Object -ComObject Scripting.FileSystemObject).GetFile("C:\Users\Jane Doe\...\claude.exe").ShortPath`.
 
+### Switching focus (`wmux focus`)
+
+Two addressing modes, both runnable by an agent (e.g. from a hook or a
+tool call) as well as by hand — run from the Windows side, like
+`wmux pane`:
+
+```powershell
+wmux focus --id my-project      # focus that session's pane/tab, wherever it is
+wmux focus --dir right          # move focus one pane right in the current window
+```
+
+`--id` finds the pane by its title (every `wmux pane` keeps the session
+ID as its fixed title) via UI Automation: it brings the right Windows
+Terminal window to the foreground, selects the tab, and puts keyboard
+focus on the exact pane — including one half of a split. `--dir`
+(`left`/`right`/`up`/`down`) is relative movement within the most
+recently used WT window (plain `wt move-focus`), useful for "jump to the
+pane I just opened next to myself".
+
 ### Closing a session (`wmux close`)
 
 ```
@@ -114,13 +149,13 @@ daemon learns the real PID at register time). This ends the agent and
 deregisters the session (`wmux list` shows `running: false`
 immediately).
 
-**It does not close the `wt.exe` pane/tab itself** if the session was
-opened via `wmux pane` — Windows Terminal leaves an inert, already-closed
-pane in its layout after the hosted process exits (confirmed even on a
-clean zero exit code, not just on error), and there's no `wt.exe`
-command-line API to remove an existing pane from outside. You'll still
-need to close that pane/tab by hand (its own close button, or
-Ctrl+Shift+W with it focused).
+For a session opened via `wmux pane`, killing the agent unwinds the
+pane's whole process chain, and the `wmux` profile's
+`closeOnExit: "always"` then removes the pane from the Windows Terminal
+layout entirely — nothing left to close by hand. (Panes opened by older
+wmux versions, which passed the commandline straight through `wt.exe`,
+still linger as inert panes — that's unfixable from outside and exactly
+why the profile flow exists.)
 
 ## Building from source
 
@@ -232,9 +267,9 @@ daemon, it's only the hook direction that needs mirrored mode.
 4. ~~**`wmux close`**~~ — done: kills a session's tracked process
    (daemon-owned for `wmux new`, registered PID for `wmux attach`/`wmux
    pane`). Verified end-to-end for both session types via real
-   process-list checks. Does not close the `wt.exe` pane/tab itself —
-   confirmed there's no external API for that; left as a known,
-   permanent limitation rather than faked with risky UI automation.
+   process-list checks. Originally couldn't remove the `wt.exe` pane
+   itself; superseded by the profile flow in (8), which makes panes
+   close themselves.
 5. **Tray/sidebar UI** — a small Wails or Tauri app subscribing to
    `GET /events` (SSE) and `GET /sessions`, showing a notification badge
    and the sidebar metadata (branch/ports/last note) per session.
@@ -269,3 +304,16 @@ daemon, it's only the hook direction that needs mirrored mode.
    restart after the process died independently (restores as exited,
    with no `wmux close`/deregister call involved), and a normal
    close-then-restart.
+8. ~~**Full pane close + focus switching**~~ — done: `wmux pane` now
+   opens panes on an auto-installed `wmux` WT profile fragment
+   (`closeOnExit: "always"`, fixed commandline `wmux pane-exec` that
+   claims the session spec from the daemon by pane title), because a
+   pane only honors its profile's `closeOnExit` when running the
+   profile's own commandline — verified empirically; a CLI-passed
+   commandline always leaves an inert dead pane. Panes now vanish on
+   agent exit and on `wmux close`. New `wmux focus --id ID` (UI
+   Automation: foreground the right WT window, select the tab, focus the
+   exact pane — verified keyboard focus lands on the right TermControl,
+   including split halves) and `wmux focus --dir left|right|up|down`
+   (relative `wt move-focus`). Both verified end-to-end on real
+   Windows 11 + WT 1.24.

@@ -49,6 +49,30 @@ type RegisterSessionRequest struct {
 	Native bool   `json:"native,omitempty"`
 }
 
+// PaneSpec is the body for POST /panes/pending — `wmux pane` files one
+// right before launching wt.exe, describing the session the new pane
+// should run. The pane itself starts a fixed `wmux pane-exec` process
+// (via the "wmux" Windows Terminal profile), which claims the spec back
+// by session ID and execs the real agent command. This indirection exists
+// because a wt.exe pane only honors its profile's closeOnExit setting
+// when running the profile's own commandline — passing a commandline on
+// the wt.exe command line leaves an inert pane behind on exit (verified
+// empirically), which is exactly what the profile flow is here to fix.
+type PaneSpec struct {
+	ID      string `json:"id"`
+	Cwd     string `json:"cwd"`
+	Distro  string `json:"distro,omitempty"`
+	Command string `json:"command"`
+	Native  bool   `json:"native,omitempty"`
+}
+
+// ClaimPaneRequest is the body for POST /panes/claim — sent by `wmux
+// pane-exec` from inside the freshly opened pane, with the session ID it
+// read from its own console title (wt.exe's --title flag sets it).
+type ClaimPaneRequest struct {
+	ID string `json:"id"`
+}
+
 // DeregisterSessionRequest is the body for POST /sessions/deregister.
 type DeregisterSessionRequest struct {
 	ID string `json:"id"`

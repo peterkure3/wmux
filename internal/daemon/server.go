@@ -19,6 +19,8 @@ func (d *Daemon) Serve(addr string) error {
 	mux.HandleFunc("/sessions/register", d.handleRegister)
 	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
 	mux.HandleFunc("/sessions/close", d.handleClose)
+	mux.HandleFunc("/panes/pending", d.handlePanePending)
+	mux.HandleFunc("/panes/claim", d.handlePaneClaim)
 	mux.HandleFunc("/notify", d.handleNotify)
 	mux.HandleFunc("/events", d.handleEvents)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +109,45 @@ func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handlePanePending files a pane spec from `wmux pane`, to be claimed by
+// the `wmux pane-exec` process that starts inside the new wt.exe pane.
+func (d *Daemon) handlePanePending(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var spec proto.PaneSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if spec.ID == "" || spec.Command == "" {
+		http.Error(w, "pane spec needs id and command", http.StatusBadRequest)
+		return
+	}
+	d.AddPaneSpec(spec)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handlePaneClaim hands a pending pane spec to the pane that will run it.
+func (d *Daemon) handlePaneClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.ClaimPaneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec, err := d.ClaimPaneSpec(req.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	json.NewEncoder(w).Encode(spec)
 }
 
 // handleNotify lets a CLI push a notification directly over HTTP, as an

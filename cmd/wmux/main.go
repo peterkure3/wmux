@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/peterkure/wmux/internal/proto"
@@ -41,6 +43,10 @@ func main() {
 		cmdAttach(os.Args[2:])
 	case "pane":
 		cmdPane(os.Args[2:])
+	case "pane-exec":
+		cmdPaneExec(os.Args[2:])
+	case "focus":
+		cmdFocus(os.Args[2:])
 	case "close":
 		cmdClose(os.Args[2:])
 	case "list":
@@ -64,7 +70,9 @@ func usage() {
                                           open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
                                           same, but runs CMD directly on Windows, no WSL
-  wmux close --id ID                     kill a session's tracked process (does not close the wt.exe pane/tab itself)
+  wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
+  wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
+  wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
   wmux list                              list sessions and their state
   wmux watch                             stream notifications as they arrive`)
 }
@@ -304,6 +312,37 @@ func cmdPane(args []string) {
 		os.Exit(1)
 	}
 
+	// The pane runs the fixed "wmux" Windows Terminal profile instead of a
+	// commandline passed through wt.exe. A pane only honors its profile's
+	// closeOnExit setting when it runs the profile's own commandline —
+	// passing one on the wt.exe command line leaves an inert, already-dead
+	// pane in the layout when the process exits, no matter the exit code
+	// (verified empirically; there is no wt.exe API to remove such a pane
+	// afterwards). The profile's commandline is `wmux pane-exec`, which
+	// claims the spec filed below and runs the real agent command — so the
+	// pane genuinely disappears when the agent exits or `wmux close` kills
+	// it.
+	if err := ensureWTProfileFragment(); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux pane: could not install the 'wmux' Windows Terminal profile: %v\n", err)
+		os.Exit(1)
+	}
+
+	// File the spec before launching wt.exe so pane-exec can't beat it to
+	// the daemon.
+	spec := proto.PaneSpec{ID: *id, Cwd: *cwd, Distro: *distro, Command: *command, Native: *native}
+	b, _ := json.Marshal(spec)
+	resp, err := http.Post(daemonAddr+"/panes/pending", "application/json", bytes.NewReader(b))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmux pane: could not reach wmuxd (is it running?): %v\n", err)
+		os.Exit(1)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "wmux pane: daemon returned %s: %s\n", resp.Status, string(body))
+		os.Exit(1)
+	}
+
 	wtArgs := []string{"-w", "0"}
 	switch *split {
 	case "right":
@@ -320,47 +359,14 @@ func cmdPane(args []string) {
 	default:
 		wtArgs = append(wtArgs, "new-tab")
 	}
-	wtArgs = append(wtArgs, "--title", *id)
-
-	if *native {
-		// wmuxExe resolves to this same binary's absolute path, so the
-		// pane can find it regardless of whatever PATH state the new
-		// powershell.exe process starts with.
-		wmuxExe, err := os.Executable()
-		if err != nil {
-			wmuxExe = "wmux.exe" // fall back to PATH lookup
-		}
-		innerCmd := fmt.Sprintf("& %s attach --id %s --cwd %s -- %s",
-			psQuote(wmuxExe), psQuote(*id), psQuote(*cwd), *command)
-		wtArgs = append(wtArgs, "powershell.exe", "-EncodedCommand", psEncodedCommand(innerCmd))
-	} else {
-		// Runs inside the distro: exec wmux attach with a real TTY, tracked
-		// under --id, which then execs the actual agent command interactively.
-		innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
-			shellQuote(*id), shellQuote(*cwd), shellQuote(*distro), *command)
-
-		// wt.exe's own command-line parser splits on unescaped ';' to chain
-		// multiple wt subcommands ("wt new-tab ; split-pane ; ..."), so any
-		// semicolon anywhere in --cmd (e.g. a compound shell command like
-		// "foo; bar") silently truncates everything after it before it ever
-		// reaches wsl.exe. Base64-encode the whole inner command so wt.exe
-		// only ever sees one opaque token. Also avoid embedded double
-		// quotes/`eval "$(...)"` here: verified empirically that wt.exe's
-		// re-tokenizing of the trailing commandline mangles a token
-		// containing literal `"` characters (likely a quoting-convention
-		// mismatch between Go's argv escaping and wt.exe's own parser),
-		// even though the same payload runs fine via wsl.exe/bash directly.
-		// A pure pipe with no quote characters at all
-		// (`echo B64|base64 -d|bash`) survives intact.
-		encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
-		execCmd := fmt.Sprintf("echo %s|base64 -d|bash", encoded)
-
-		wtArgs = append(wtArgs, "wsl.exe")
-		if *distro != "" {
-			wtArgs = append(wtArgs, "-d", *distro)
-		}
-		wtArgs = append(wtArgs, "--cd", *cwd, "--", "bash", "-lc", execCmd)
-	}
+	// --title carries the session ID into the pane: it becomes the new
+	// console's title, which is the only channel wt.exe gives us to tell
+	// pane-exec which spec is its own (the profile flow means we can't pass
+	// it arguments). --suppressApplicationTitle keeps the agent from
+	// renaming the tab afterwards, so `wmux focus --id` can keep finding
+	// the pane by session ID for the whole session lifetime.
+	wtArgs = append(wtArgs,
+		"--title", *id, "--suppressApplicationTitle", "--profile", "wmux")
 
 	cmd := exec.Command("wt.exe", wtArgs...)
 	if err := cmd.Start(); err != nil {
@@ -372,6 +378,264 @@ func cmdPane(args []string) {
 		label = "new tab"
 	}
 	fmt.Printf("opened %s for session %s\n", label, *id)
+}
+
+// ensureWTProfileFragment installs (or refreshes) the "wmux" Windows
+// Terminal profile via WT's JSON fragment mechanism —
+// %LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\wmux\wmux.json —
+// which adds a profile without ever touching the user's own settings.json
+// content. The profile's commandline runs this same binary's `pane-exec`,
+// and closeOnExit "always" is what makes a wmux pane actually disappear
+// when its process dies (including via `wmux close`), instead of leaving
+// an inert pane behind.
+//
+// A running Windows Terminal only reads new fragments during a settings
+// reload, so after writing the file this touches settings.json to nudge
+// the live WT process into importing it immediately (verified working
+// against WT 1.24 without a restart).
+func ensureWTProfileFragment() error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("wmux pane drives wt.exe and must run on Windows")
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return fmt.Errorf("LOCALAPPDATA is not set")
+	}
+	wmuxExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("could not resolve wmux.exe's own path: %w", err)
+	}
+
+	// The path may contain spaces (user profile dirs usually do), so it is
+	// always quoted — WT parses the profile commandline itself, Windows-style.
+	fragment := fmt.Sprintf(
+		`{"profiles":[{"name":"wmux","commandline":%s,"closeOnExit":"always","suppressApplicationTitle":true}]}`,
+		mustJSON(fmt.Sprintf(`"%s" pane-exec`, wmuxExe)))
+
+	dir := filepath.Join(localAppData, "Microsoft", "Windows Terminal", "Fragments", "wmux")
+	path := filepath.Join(dir, "wmux.json")
+
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == fragment {
+		return nil // already installed and current; WT has had time to import it
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(fragment), 0o644); err != nil {
+		return err
+	}
+
+	// Nudge any running WT into a settings reload so the fragment is
+	// imported now rather than at its next restart.
+	touched := false
+	now := time.Now()
+	for _, settings := range []string{
+		filepath.Join(localAppData, `Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json`),
+		filepath.Join(localAppData, `Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json`),
+		filepath.Join(localAppData, `Microsoft\Windows Terminal\settings.json`),
+	} {
+		if err := os.Chtimes(settings, now, now); err == nil {
+			touched = true
+		}
+	}
+	if touched {
+		// Give WT a beat to finish the import before wt.exe is asked to
+		// open a pane with --profile wmux.
+		time.Sleep(2 * time.Second)
+	}
+	return nil
+}
+
+func mustJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// cmdPaneExec is what runs inside every pane `wmux pane` opens — it is the
+// "wmux" Windows Terminal profile's fixed commandline, never something a
+// user runs by hand. It reads its own console title (wt.exe's --title set
+// it to the session ID), claims the matching pane spec from the daemon,
+// and runs the agent via the exact same inner commands `wmux pane` used
+// to hand to wt.exe directly.
+func cmdPaneExec(args []string) {
+	title, err := consoleTitle()
+	if err != nil {
+		paneExecFail("could not read console title: %v", err)
+	}
+	id := strings.TrimSpace(title)
+
+	// Claim with a few retries: on a loaded machine this pane can start
+	// before `wmux pane`'s own POST /panes/pending has landed.
+	var spec proto.PaneSpec
+	claimed := false
+	for attempt := 0; attempt < 10 && !claimed; attempt++ {
+		if attempt > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		b, _ := json.Marshal(proto.ClaimPaneRequest{ID: id})
+		resp, err := http.Post(daemonAddr+"/panes/claim", "application/json", bytes.NewReader(b))
+		if err != nil {
+			continue // daemon not reachable (yet); retry
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			continue // spec not filed yet; retry
+		}
+		if err := json.Unmarshal(body, &spec); err == nil {
+			claimed = true
+		}
+	}
+	if !claimed {
+		paneExecFail("no pending pane spec for session %q — was this pane opened by 'wmux pane'?", id)
+	}
+
+	var cmd *exec.Cmd
+	if spec.Native {
+		wmuxExe, err := os.Executable()
+		if err != nil {
+			wmuxExe = "wmux.exe" // fall back to PATH lookup
+		}
+		// PowerShell parses spec.Command (it may be a full commandline with
+		// arguments), and -EncodedCommand keeps the whole script one opaque
+		// token — same quoting rationale as the old direct wt.exe flow.
+		innerCmd := fmt.Sprintf("& %s attach --id %s --cwd %s -- %s",
+			psQuote(wmuxExe), psQuote(spec.ID), psQuote(spec.Cwd), spec.Command)
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-EncodedCommand", psEncodedCommand(innerCmd))
+	} else {
+		// Runs inside the distro: exec wmux attach with a real TTY, tracked
+		// under the session ID, which then execs the actual agent command
+		// interactively. Base64-piped for the same reason as ever: no
+		// quoting survives more than one of these layers intact.
+		innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
+			shellQuote(spec.ID), shellQuote(spec.Cwd), shellQuote(spec.Distro), spec.Command)
+		encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
+
+		wslArgs := []string{}
+		if spec.Distro != "" {
+			wslArgs = append(wslArgs, "-d", spec.Distro)
+		}
+		wslArgs = append(wslArgs, "--cd", spec.Cwd, "--", "bash", "-lc",
+			fmt.Sprintf("echo %s|base64 -d|bash", encoded))
+		cmd = exec.Command("wsl.exe", wslArgs...)
+	}
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		paneExecFail("%v", err)
+	}
+}
+
+// paneExecFail reports an error and holds the pane open long enough for a
+// human to actually read it — the pane closes the instant this process
+// exits (closeOnExit "always"), which would otherwise reduce every failure
+// to an unreadable flash.
+func paneExecFail(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "wmux pane-exec: "+format+"\n", a...)
+	time.Sleep(5 * time.Second)
+	os.Exit(1)
+}
+
+// focusScript is the PowerShell/UI-Automation script behind `wmux focus
+// --id`. wt.exe can only move focus relative to the currently focused pane
+// (move-focus) or by tab index — neither addresses "the pane running
+// session X" — but every wmux pane keeps its session ID as its title
+// (--title + --suppressApplicationTitle), so UIA can find it by name:
+// bring its top-level terminal window to the foreground, select its tab,
+// and put keyboard focus on the exact TermControl (which handles the
+// split-pane case, where several panes share one tab). %s is the
+// PowerShell-single-quoted session ID.
+const focusScript = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class WmuxFG { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
+'@
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'CASCADIA_HOSTING_WINDOW_CLASS')
+$wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+foreach ($w in $wins) {
+  $nc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, %s)
+  $hits = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $nc)
+  $tab = $null; $term = $null
+  foreach ($h in $hits) {
+    if ($h.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem) { $tab = $h }
+    if ($h.Current.ClassName -eq 'TermControl') { $term = $h }
+  }
+  if ($term -or $tab) {
+    [WmuxFG]::SetForegroundWindow([IntPtr]$w.Current.NativeWindowHandle) | Out-Null
+    if ($tab) { try { ($tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select() } catch {} }
+    if ($term) { $term.SetFocus() }
+    Write-Output 'ok'
+    exit 0
+  }
+}
+Write-Output 'not-found'
+exit 1
+`
+
+// cmdFocus switches Windows Terminal focus — the counterpart to `wmux
+// pane` that lets an agent (or the user) steer which pane is active
+// without touching the mouse. Two addressing modes:
+//
+//	--id ID    focus the pane/tab whose session ID this is, wherever it
+//	           lives (any WT window; verified to land keyboard focus on
+//	           the exact pane, including one half of a split)
+//	--dir D    move focus one pane left/right/up/down within the most
+//	           recently used WT window (plain `wt move-focus`) — relative,
+//	           for "jump to the pane I just opened next to me"
+//
+// Like `wmux pane`, this drives wt.exe/UIA and must run from the Windows
+// side, not from inside a WSL distro.
+func cmdFocus(args []string) {
+	fs := newFlagSet("focus")
+	id := fs.String("id", "", "session ID whose pane/tab to focus (as set by wmux pane)")
+	dir := fs.String("dir", "", "move pane focus within the current window: left, right, up, or down")
+	fs.Parse(args)
+
+	switch {
+	case *dir != "" && *id == "":
+		valid := map[string]bool{"left": true, "right": true, "up": true, "down": true}
+		if !valid[*dir] {
+			fmt.Fprintln(os.Stderr, "wmux focus: --dir must be left, right, up, or down")
+			os.Exit(1)
+		}
+		// -w 0 targets the most recently used WT window — for an agent
+		// running inside a pane, that's its own window.
+		if err := exec.Command("wt.exe", "-w", "0", "move-focus", *dir).Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "wmux focus: could not launch wt.exe (is Windows Terminal installed and on PATH?): %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("moved focus %s\n", *dir)
+
+	case *id != "" && *dir == "":
+		script := fmt.Sprintf(focusScript, psQuote(*id))
+		// Read stdout only — powershell.exe emits CLIXML progress noise on
+		// stderr ("Preparing modules for first use...") that would drown the
+		// script's own ok/not-found verdict in a combined stream.
+		out, err := exec.Command("powershell.exe", "-NoProfile", "-EncodedCommand", psEncodedCommand(script)).Output()
+		switch result := strings.TrimSpace(string(out)); result {
+		case "ok":
+			fmt.Printf("focused session %s\n", *id)
+		case "not-found":
+			fmt.Fprintf(os.Stderr, "wmux focus: no pane or tab titled %q found in any Windows Terminal window\n", *id)
+			os.Exit(1)
+		default:
+			fmt.Fprintf(os.Stderr, "wmux focus: %v: %s\n", err, result)
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Fprintln(os.Stderr, "wmux focus: exactly one of --id or --dir is required")
+		os.Exit(1)
+	}
 }
 
 // shellQuote wraps a value in single quotes for the bash -lc string built
@@ -443,11 +707,12 @@ func cmdNew(args []string) {
 }
 
 // cmdClose kills a session's tracked process (daemon-owned for `wmux new`,
-// or the registered PID for `wmux attach`/`wmux pane`). This ends the
-// agent and, transitively, whatever wrapping shell wt.exe is hosting for a
-// pane-opened session — but wmuxd has no way to make Windows Terminal
-// remove the now-inert pane/tab from its own UI, so that part still needs
-// closing by hand (Ctrl+Shift+W or the tab's close button).
+// or the registered PID for `wmux attach`/`wmux pane`). For a pane opened
+// by `wmux pane`, killing the agent tears down the pane's whole process
+// chain, and the "wmux" profile's closeOnExit:"always" then makes Windows
+// Terminal remove the pane itself from the layout — nothing left to close
+// by hand. (A session run in some other terminal just ends; what its
+// terminal does about it is that terminal's business.)
 func cmdClose(args []string) {
 	fs := newFlagSet("close")
 	id := fs.String("id", "", "session ID")
@@ -471,7 +736,7 @@ func cmdClose(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux close: daemon returned %s: %s\n", resp.Status, string(body))
 		os.Exit(1)
 	}
-	fmt.Printf("closed session %s (the wt.exe pane/tab, if any, may still need closing by hand)\n", *id)
+	fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
 }
 
 func cmdList(args []string) {

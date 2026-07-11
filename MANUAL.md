@@ -263,14 +263,28 @@ Verified: this kills the real OS process (confirmed via process list,
 not just daemon state) and deregisters the session immediately.
 
 **If you opened it via `wmux pane`:** ending the process (whether by
-exiting the agent yourself or via `wmux close`) is enough to end the
-*wmux session* cleanly (`wmux list` will show `running: false`), but it
-does **not** close the `wt.exe` pane/tab itself. Verified: even a clean
-zero exit code leaves an inert, already-closed pane sitting in Windows
-Terminal's layout — this isn't about exit codes or timing, `wt.exe` just
-has no command-line API to remove an existing pane from outside. You'll
-need to close that pane/tab by hand (its own close button, or
-Ctrl+Shift+W with it focused).
+exiting the agent yourself or via `wmux close`) also removes the pane
+itself from Windows Terminal's layout — `wmux pane` opens every pane on
+an auto-installed `wmux` WT profile with `closeOnExit: "always"`, whose
+fixed commandline (`wmux pane-exec`) owns the pane's whole process
+chain. (Panes opened by pre-profile wmux versions passed the commandline
+straight through `wt.exe`, which never honors `closeOnExit` — those
+still linger as inert panes and can only be closed by hand.)
+
+## Switching focus
+
+```
+wmux focus --id my-project     # focus that session's pane/tab, wherever it is
+wmux focus --dir right         # move focus one pane right in the current window
+```
+
+Run from the Windows side, like `wmux pane`. `--id` finds the pane by
+its title — every `wmux pane` keeps the session ID as its fixed pane
+title — via UI Automation: it foregrounds the right Windows Terminal
+window, selects the tab, and puts keyboard focus on the exact pane,
+including one half of a split. `--dir` is relative movement
+(`left`/`right`/`up`/`down`) within the most recently used WT window —
+handy for an agent that just opened a pane next to itself.
 
 ## Troubleshooting
 
@@ -281,4 +295,6 @@ Ctrl+Shift+W with it focused).
 | `wmux pane` opens a window but the session never shows in `wmux list` | `wmux` not on PATH inside the target WSL distro, or `wmuxd` isn't running there | `wsl -d <distro> -- which wmux`; start `wmuxd` inside the distro |
 | `wmux pane --native --cmd "..."` seems to drop a trailing flag like `--split` | PowerShell 5.1 embedded-quote bug (see the gotcha above) | Use the 8.3 short path instead of a quoted long path |
 | `wmux notify ... ` doesn't show up against the right session in `wmux list` | Forgot `--session` | Add `--session <id>` |
-| `wmux close --id X` succeeds but the pane/tab is still visible | Expected — `wt.exe` has no API to remove an existing pane from outside | Close the pane/tab by hand |
+| `wmux close --id X` succeeds but the pane/tab is still visible | Pane opened by a pre-profile wmux version (commandline passed through `wt.exe` never honors `closeOnExit`) | Close that pane by hand; panes opened by current `wmux pane` close themselves |
+| `wmux pane` opens a plain shell instead of the agent | The `wmux` WT profile fragment wasn't imported yet (first-ever run; WT normally imports it live after `wmux pane` touches settings.json) | Retry `wmux pane`; if it persists, restart Windows Terminal once |
+| `wmux focus --id X` says not found | Pane title no longer matches the session ID (pane opened by an old wmux version without `--suppressApplicationTitle`, or session not opened via `wmux pane`) | Use `wmux focus --dir` instead, or reopen the pane with current `wmux pane` |
