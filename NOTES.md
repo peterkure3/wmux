@@ -192,6 +192,60 @@ arguments. Workaround: use the target's 8.3 short path
 to avoid needing embedded quotes at all — verified this sidesteps it
 completely.
 
+**Follow-up fix (2026-07-11): `--split v`/`h` renamed to `right`/`down`.**
+User reported "we have horizontal pane splitting but no vertical pane
+splitting" after using `--split v`. Both directions were actually already
+implemented identically in `cmdPane` — verified by screenshotting real
+`wt.exe split-pane -V` and `-H` invocations directly: `-V`
+(`--vertical`) produces a **left/right** layout, `-H` (`--horizontal`)
+produces **top/bottom**. `wt.exe` names a split after the orientation of
+the *dividing line*, which is backwards from the much more common
+intuition (used by e.g. tmux, VS Code) that "vertical split" means panes
+stacked vertically (top/bottom) and "horizontal split" means panes
+side-by-side. The user's `--split v` was working exactly as coded
+(left/right) but not as expected. Fixed by renaming the flag values from
+`v`/`h` to unambiguous `right`/`down` (`wtArgs` still emits `-V`/`-H`
+under the hood, unchanged) — removes the ambiguity entirely rather than
+just documenting it. Updated `README.md`, `MANUAL.md`, `MANUAL.tex`, and
+`SKILL.md` to match, plus the reasoning note about `wt.exe`'s own naming.
+
+**Follow-up feature (2026-07-11): `wmux close`.** After the split-naming
+fix, tested whether `wmux pane`-opened panes could actually be closed
+(not just have their agent process exit) — found they can't, by design:
+a `wt.exe` pane whose hosted process exits is left as an inert,
+already-closed pane in the layout (confirmed via screenshot even for a
+clean zero exit code, ruling out an exit-code/timing explanation), and
+`wt.exe` has no documented command-line API to remove an existing pane
+from outside. Deliberately did **not** attempt to fake this via UI
+automation or by broadly killing `wt.exe`/`conhost.exe`/`OpenConsole.exe`
+processes — a machine accumulates many of these across unrelated
+windows/tabs including ones actively in use, and there's no reliable way
+to distinguish "the test pane" from "the user's real terminal" by image
+name alone (this session had ended up with dozens of leftover
+conhost/OpenConsole processes just from testing).
+
+What *is* now closable: the session's actual tracked process, via a new
+`wmux close --id ID` command. Required plumbing the real PID through to
+the daemon: `RegisterSessionRequest` gained a `PID` field (Register
+proper for the mux/HTTP wire type; `Session` gained a `pid` field
+populated either from the daemon's own `cmd.Process.Pid` for `wmux new`,
+or from the client-supplied PID for `wmux attach`/`wmux pane`). This
+required restructuring `cmdAttach` in `cmd/wmux/main.go` to call
+`cmd.Start()` before registering (to have a real PID to send) rather
+than the previous single `cmd.Run()` call — registration now happens
+between `Start()` and `Wait()`. New `Daemon.Close(id)` in
+`internal/daemon/session.go` looks up the tracked PID and calls
+`os.FindProcess(pid).Kill()`; new `POST /sessions/close` route in
+`server.go`; new `wmux close --id ID` CLI command. Verified end-to-end
+for both session types — confirmed via actual process-list checks (not
+just daemon state) that the real OS process dies: for a `wmux attach`
+session, watched the exact process count drop by one; for a `wmux new`
+(WSL, daemon-owned) session, confirmed via `pgrep` inside the distro
+that the `sleep 60` process was actually gone after `wmux close`, not
+just marked exited in `wmux list`. Also verified closing an
+already-exited or nonexistent session ID returns a clean 404, not a
+crash or hang.
+
 **Still not tested:**
 
 - Real Codex hook wiring end-to-end with a live Codex invocation (Codex

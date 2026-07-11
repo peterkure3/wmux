@@ -18,6 +18,7 @@ func (d *Daemon) Serve(addr string) error {
 	mux.HandleFunc("/sessions", d.handleSessions)
 	mux.HandleFunc("/sessions/register", d.handleRegister)
 	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
+	mux.HandleFunc("/sessions/close", d.handleClose)
 	mux.HandleFunc("/notify", d.handleNotify)
 	mux.HandleFunc("/events", d.handleEvents)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +64,7 @@ func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	sess, err := d.Register(req.ID, req.Cwd, req.Distro)
+	sess, err := d.Register(req.ID, req.Cwd, req.Distro, req.PID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -84,6 +85,24 @@ func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Deregister(req.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleClose kills a session's tracked process — called by `wmux close`.
+func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.CloseSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.Close(req.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}

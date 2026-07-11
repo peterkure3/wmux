@@ -1,0 +1,304 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\definecolor{coderule}{rgb}{0.8,0.8,0.8}
+
+\lstdefinestyle{codebox}{
+  backgroundcolor=\color{codebg},
+  rulecolor=\color{coderule},
+  frame=single,
+  framerule=0.4pt,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  framexleftmargin=4pt,
+  framexrightmargin=4pt,
+}
+\lstset{style=codebox}
+
+\title{WMUX - User Manual}
+\author{Peter Kure}
+\date{July 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+\texttt{wmuxd} is a small background daemon that watches your AI coding agent sessions (Claude Code, Codex) for notification events -- ``I need your input,'' ``permission needed,'' etc -- and gives you one place to see and react to them, instead of alt-tabbing between a dozen terminal windows to find out which one is actually waiting on you.
+
+\texttt{wmux} is the CLI you use to talk to it: spawn sessions, open terminal panes, wire up hooks, and watch for notifications live.
+
+For architecture and setup rationale, see \texttt{README.md}. For development history and known gotchas discovered during testing, see \texttt{NOTES.md}.
+
+\section{Before You Start: Where Does Your Agent Actually Run?}
+
+This is the single most important thing to get right, and it's not always obvious. Check:
+
+\begin{lstlisting}
+where claude
+where codex
+\end{lstlisting}
+
+If either prints a \texttt{.exe} path (e.g.\ \texttt{C:\textbackslash Users\textbackslash you\textbackslash .local\textbackslash bin\textbackslash claude.exe}), that agent is a \textbf{native Windows install} -- even if you also happen to have WSL distros on the machine for other things. Only treat an agent as \textbf{WSL-based} if it's actually installed inside a distro:
+
+\begin{lstlisting}
+wsl -d <distro> -- which claude
+\end{lstlisting}
+
+Everything below is split into ``native Windows'' and ``WSL'' examples -- use the one that matches what you just found. Don't assume; check.
+
+\section{Installation}
+
+\begin{enumerate}
+  \item Build or grab the binaries -- \texttt{wmuxd.exe}/\texttt{wmux.exe} for native Windows use, \texttt{bin/linux-amd64/wmuxd}/\texttt{wmux} if you also need a WSL-resident daemon.
+  \item Put \texttt{wmux.exe}/\texttt{wmuxd.exe} somewhere permanent (e.g.\ \texttt{C:\textbackslash wmux\textbackslash}) and add that folder to your PATH so you can just type \texttt{wmux} from any terminal:
+\begin{lstlisting}
+$current = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$current;C:\wmux", "User")
+\end{lstlisting}
+  (Open a \textbf{new} terminal afterwards -- existing ones won't see the updated PATH.)
+  \item If you also need the WSL-resident daemon, copy the Linux binaries somewhere on the distro's PATH:
+\begin{lstlisting}
+sudo cp bin/linux-amd64/wmux bin/linux-amd64/wmuxd /usr/local/bin/
+\end{lstlisting}
+\end{enumerate}
+
+\section{Starting the Daemon}
+
+Native Windows:
+\begin{lstlisting}
+wmuxd.exe
+\end{lstlisting}
+
+WSL-resident:
+\begin{lstlisting}
+nohup wmuxd > /tmp/wmuxd.log 2>&1 &
+\end{lstlisting}
+
+Either way, confirm it's up:
+\begin{lstlisting}
+curl.exe -s http://127.0.0.1:47823/healthz
+# -> ok
+\end{lstlisting}
+
+You need \texttt{wmuxd} running before anything else in this manual will work.
+
+\section{Wiring the Notification Hook}
+
+This is what makes Claude Code push a message into wmux whenever it's waiting on you, instead of you having to notice a quiet terminal.
+
+\subsection{Native Windows Agent}
+
+Edit \texttt{C:\textbackslash Users\textbackslash\textless you\textgreater\textbackslash .claude\textbackslash settings.json}:
+
+\begin{lstlisting}
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "C:\\wmux\\wmux.exe hook-claude" }]
+      }
+    ]
+  }
+}
+\end{lstlisting}
+
+(Use the full path to \texttt{wmux.exe} here rather than relying on PATH -- the process that invokes hooks doesn't always inherit a freshly updated one.)
+
+\subsection{WSL-Based Agent}
+
+Edit the \emph{WSL-side} \texttt{\textasciitilde/.claude/settings.json} (inside the distro):
+
+\begin{lstlisting}
+{
+  "hooks": {
+    "Notification": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "wmux hook-claude" }] }
+    ]
+  }
+}
+\end{lstlisting}
+
+\subsection{Codex (Either Side)}
+
+Edit \texttt{\textasciitilde/.codex/config.toml} (root keys must come before any \texttt{[tables]}):
+
+\begin{lstlisting}
+notify = ["wmux", "hook-codex", "--session", "my-project"]
+\end{lstlisting}
+
+\section{Running an Agent Session}
+
+\subsection{Example: Native Windows Claude Code, in Your Current Terminal}
+
+\begin{lstlisting}
+wmux attach --id my-project --cwd D:\path\to\project -- "C:\Users\you\.local\bin\claude.exe"
+\end{lstlisting}
+
+Runs \texttt{claude.exe} right there with a real TTY (colors, readline, prompts all work normally) while registering the session with the daemon under the id \texttt{my-project}. When you exit Claude, it deregisters automatically.
+
+\subsection{Example: Native Windows Claude Code, in a New Windows Terminal Pane}
+
+\begin{lstlisting}
+wmux pane --native --id my-project --cwd D:\path\to\project ^
+  --cmd "C:\Users\you\.local\bin\claude.exe" --split right
+\end{lstlisting}
+
+Opens a new side-by-side split running the same thing. \texttt{--split} also takes \texttt{down} (stacked split) or \texttt{tab} (new tab, the default if you omit \texttt{--split}).
+
+\texttt{wt.exe}'s own \texttt{-V}/\texttt{-H} flags name a split after the orientation of the \emph{dividing line}, which is backwards from what most people mean by ``vertical''/``horizontal'' -- verified by screenshot that \texttt{-V} actually produces left/right, not top/bottom. \texttt{wmux pane} uses \texttt{right}/\texttt{down} instead to sidestep that confusion entirely.
+
+\paragraph{Gotcha.} If the exe path has a space in it (a common case -- usernames like \texttt{Peter Kure} do this), don't wrap it in embedded double quotes inside \texttt{--cmd}. PowerShell 5.1 has a known bug marshalling arguments with literal embedded \texttt{"} to native programs, and it can silently swallow trailing flags like \texttt{--split}. Instead, use the path's 8.3 short form, which has no spaces and needs no quoting:
+
+\begin{lstlisting}
+(New-Object -ComObject Scripting.FileSystemObject).GetFile(
+  "C:\Users\you\.local\bin\claude.exe").ShortPath
+# -> C:\Users\PETERK~1\LOCAL~1\bin\claude.exe
+\end{lstlisting}
+
+\begin{lstlisting}
+wmux pane --native --id my-project --cwd D:\path\to\project ^
+  --cmd "C:\Users\PETERK~1\LOCAL~1\bin\claude.exe" --split right
+\end{lstlisting}
+
+\subsection{Example: WSL-Based Codex, Headless (Batch Run, No TTY)}
+
+For scripted/background runs where you don't need to type anything:
+
+\begin{lstlisting}
+wmux new --id nightly-refactor --cwd /home/you/my-project \
+  --cmd "codex exec 'run the migration'"
+\end{lstlisting}
+
+\texttt{--distro} is optional here -- if omitted, \texttt{wsl.exe} uses your system's actual default distro. Only pass it if you want a non-default one:
+
+\begin{lstlisting}
+wmux new --id nightly-refactor --cwd /home/you/my-project \
+  --cmd "codex exec '...'" --distro Ubuntu-22.04
+\end{lstlisting}
+
+\subsection{Example: WSL-Based Claude Code, Interactive}
+
+\begin{lstlisting}
+wmux attach --id my-project --cwd /home/you/my-project -- claude
+\end{lstlisting}
+
+\subsection{Example: WSL-Based Claude Code, New Windows Terminal Pane}
+
+\begin{lstlisting}
+wmux pane --id my-project --cwd /home/you/my-project --cmd claude --split right
+\end{lstlisting}
+
+Note: no \texttt{--native} here -- that flag is specifically for the Windows path. Plain \texttt{wmux pane} always launches inside WSL via \texttt{wsl.exe}.
+
+\texttt{--cmd} can be a compound command (semicolons, pipes) and it'll still work correctly -- the underlying quoting through \texttt{wt.exe} is handled for you:
+
+\begin{lstlisting}
+wmux pane --id build-and-run --cwd /home/you/my-project \
+  --cmd "npm install; npm run dev" --split down
+\end{lstlisting}
+
+\section{Watching for Notifications}
+
+Two ways to check in on things.
+
+\subsection{Snapshot}
+
+Current state of every known session (git branch, listening ports, last notification, running/exited):
+
+\begin{lstlisting}
+wmux list
+\end{lstlisting}
+
+Example output:
+
+\begin{lstlisting}
+my-project             running    /home/you/my-project   branch=main   ports=[3000] note="Claude is waiting for your input"
+nightly-refactor       exited     /home/you/my-project   branch=main   ports=[]     note=""
+\end{lstlisting}
+
+\subsection{Live Feed}
+
+Streams notifications as they happen, useful to leave running in a spare terminal:
+
+\begin{lstlisting}
+wmux watch
+\end{lstlisting}
+
+Example output as it happens:
+
+\begin{lstlisting}
+watching for notifications... (Ctrl+C to stop)
+[14:32:07] my-project: Claude is waiting for your input
+[14:35:51] nightly-refactor: Codex finished a turn
+\end{lstlisting}
+
+\section{Manual/Test Notifications}
+
+Useful for testing your setup without waiting for a real agent event:
+
+\begin{lstlisting}
+wmux notify "test message" --session my-project
+\end{lstlisting}
+
+\textbf{Common mistake:} forgetting \texttt{--session}. Without it, the notification still gets pushed (you'll see it in \texttt{wmux watch}), but with an empty session ID -- it won't attach to any session in \texttt{wmux list}, so you won't see it reflected there. Always pass \texttt{--session <id>} matching an id you're tracking with \texttt{wmux new}/\texttt{wmux attach}.
+
+\section{Ending a Session}
+
+Just exit the agent (Ctrl+D, \texttt{/exit}, closing the process) -- \texttt{wmux attach} notices and deregisters automatically, including on a non-zero exit code.
+
+To end it remotely instead of from inside the session:
+
+\begin{lstlisting}
+wmux close --id my-project
+\end{lstlisting}
+
+Kills the session's tracked process -- the daemon-owned process for \texttt{wmux new}, or the registered PID for \texttt{wmux attach}/\texttt{wmux pane}. Verified: this kills the real OS process (confirmed via process list, not just daemon state) and deregisters the session immediately.
+
+\textbf{If you opened it via \texttt{wmux pane}:} ending the process (whether by exiting the agent yourself or via \texttt{wmux close}) is enough to end the \emph{wmux session} cleanly (\texttt{wmux list} will show \texttt{running: false}), but it does \textbf{not} close the \texttt{wt.exe} pane/tab itself. Verified: even a clean zero exit code leaves an inert, already-closed pane sitting in Windows Terminal's layout -- this isn't about exit codes or timing, \texttt{wt.exe} just has no command-line API to remove an existing pane from outside. You'll need to close that pane/tab by hand (its own close button, or Ctrl+Shift+W with it focused).
+
+\section{Troubleshooting}
+
+\begin{tabular}{|p{4cm}|p{4.5cm}|p{6cm}|}
+\hline
+\textbf{Symptom} & \textbf{Likely cause} & \textbf{Fix} \\
+\hline
+Session exits instantly, no output (WSL commands) &
+Bad or missing \texttt{--distro} &
+\texttt{wsl -l -v} to see real distro names; omit \texttt{--distro} to use your default, or pass the correct name \\
+\hline
+\texttt{wmux hook-claude}/\texttt{hook-codex} says ``could not reach wmuxd'' &
+Hook wired to the wrong side &
+A native Windows agent's hook needs a native \texttt{wmuxd}; a WSL agent's hook needs a WSL-resident \texttt{wmuxd} -- they're on separate network namespaces unless WSL2 mirrored networking is on \\
+\hline
+\texttt{wmux pane} opens a window but the session never shows in \texttt{wmux list} &
+\texttt{wmux} not on PATH inside the target WSL distro, or \texttt{wmuxd} isn't running there &
+\texttt{wsl -d <distro> -- which wmux}; start \texttt{wmuxd} inside the distro \\
+\hline
+\texttt{wmux pane --native --cmd "..."} seems to drop a trailing flag like \texttt{--split} &
+PowerShell 5.1 embedded-quote bug (see the gotcha above) &
+Use the 8.3 short path instead of a quoted long path \\
+\hline
+\texttt{wmux notify ...} doesn't show up against the right session in \texttt{wmux list} &
+Forgot \texttt{--session} &
+Add \texttt{--session <id>} \\
+\hline
+\texttt{wmux close --id X} succeeds but the pane/tab is still visible &
+Expected -- \texttt{wt.exe} has no API to remove an existing pane from outside &
+Close the pane/tab by hand \\
+\hline
+\end{tabular}
+
+\end{document}

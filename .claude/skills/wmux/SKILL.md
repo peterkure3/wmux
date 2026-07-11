@@ -95,10 +95,16 @@ Real TTY passthrough, registers with the daemon, deregisters on exit
 
 **Native Windows agent, in a new Windows Terminal pane — `wmux pane --native`:**
 ```powershell
-wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd "C:\Users\you\.local\bin\claude.exe" --split v
+wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd "C:\Users\you\.local\bin\claude.exe" --split right
 ```
 Same TTY/daemon guarantees as `wmux attach`, just opened in a fresh
-tab/split instead of your current terminal.
+tab/split instead of your current terminal. `--split` takes `tab`
+(default, new tab), `right` (side-by-side), or `down` (stacked) — not
+`v`/`h`: `wt.exe`'s own `-V`/`-H` name a split after the orientation of
+the *dividing line*, backwards from what most people mean by
+"vertical"/"horizontal" (verified by screenshot that `-V` produces
+left/right, not top/bottom), so `wmux pane` uses unambiguous names
+instead.
 
 **PowerShell 5.1 quoting gotcha for `--cmd` on the native path:** if the
 agent's path contains a space (e.g. a username like `Peter Kure`), do
@@ -134,9 +140,9 @@ wmux attach --id my-project --cwd /home/you/my-project -- claude
 from PowerShell, not from inside WSL — `wt.exe` isn't reachable from
 within a distro):
 ```powershell
-wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split v
+wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split right
 ```
-`--split` accepts `tab` (default), `v`, or `h`. If `--cmd` needs to be a
+`--split` accepts `tab` (default), `right`, or `down`. If `--cmd` needs to be a
 compound shell command (semicolons, pipes, etc.), that's fine — `wmux
 pane` base64-encodes the inner command specifically to survive `wt.exe`'s
 own command-line tokenizer, which otherwise splits on unescaped `;` and
@@ -181,6 +187,38 @@ before any `[tables]`):
 ```toml
 notify = ["wmux", "hook-codex", "--session", "my-project"]
 ```
+
+## Stopping a session — `wmux close`
+
+```
+wmux close --id my-project
+```
+
+Kills the session's tracked process — the daemon-owned process for
+`wmux new`, or the registered PID for `wmux attach`/`wmux pane` (the
+daemon learns the real PID at register time, added specifically to make
+this command possible). Ends the agent and deregisters the session
+(`running` flips to `false` in `wmux list`) immediately. Verified against
+both a daemon-owned (`wmux new`) and a registered (`wmux attach`) session:
+confirmed via actual process-list checks (not just daemon state) that the
+real OS process dies, not just the wmux-side bookkeeping.
+
+Exiting the agent yourself (Ctrl+D, `/exit`) works the same way for a
+`wmux attach` session — `wmux close` is for ending one *remotely*,
+without a terminal attached to it.
+
+**`wmux close` does not close the `wt.exe` pane/tab itself** if the
+session was opened via `wmux pane` — Windows Terminal leaves an inert,
+already-closed pane in its layout after the hosted process exits,
+confirmed even on a clean zero exit code (so it's not an exit-code or
+timing thing), and there's no `wt.exe` command-line API to remove an
+existing pane from outside. That part still needs closing by hand (its
+own close button, or Ctrl+Shift+W with it focused) — don't attempt to
+fake this by broadly killing `wt.exe`/`conhost.exe`/`OpenConsole.exe`
+processes by image name; a real machine accumulates many of these across
+unrelated windows/tabs (including ones the user is actively working in),
+and there's no reliable way to tell which belongs to which pane without
+already knowing the specific PID `wmux close` targets.
 
 ## Diagnosing problems
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -30,6 +31,7 @@ type Session struct {
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
+	pid      int
 	branch   string
 	ports    []int
 	lastNote string
@@ -131,7 +133,7 @@ func buildCommand(cwd, distro, command string) *exec.Cmd {
 // asks the daemon to track metadata (branch/ports) and accept notify events
 // under this ID. Used when the actual interactive terminal needs to stay
 // attached to a real console/pty rather than a daemon-owned pipe.
-func (d *Daemon) Register(id, cwd, distro string) (*Session, error) {
+func (d *Daemon) Register(id, cwd, distro string, pid int) (*Session, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if existing, exists := d.sessions[id]; exists {
@@ -145,7 +147,7 @@ func (d *Daemon) Register(id, cwd, distro string) (*Session, error) {
 		// same session ID can be reused across restarts of the same agent.
 	}
 
-	sess := &Session{ID: id, Cwd: cwd, Distro: distro, running: true}
+	sess := &Session{ID: id, Cwd: cwd, Distro: distro, pid: pid, running: true}
 	d.sessions[id] = sess
 
 	go d.pollMetadata(sess)
@@ -168,6 +170,52 @@ func (d *Daemon) Deregister(id string) error {
 	sess.mu.Unlock()
 	return nil
 }
+
+// Close terminates a session's underlying process — the daemon-owned
+// process for a `wmux new` session, or the registered PID for a `wmux
+// attach`/`wmux pane` session. This is what `wmux close` calls: it ends
+// the agent (and, transitively, whatever wrapping shell wt.exe is hosting
+// for a pane-opened session), even though wmuxd itself has no way to make
+// Windows Terminal remove the now-inert pane/tab from its own UI — that
+// part still needs closing by hand.
+func (d *Daemon) Close(id string) error {
+	d.mu.RLock()
+	sess, ok := d.sessions[id]
+	d.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+
+	sess.mu.Lock()
+	pid := sess.pid
+	running := sess.running
+	sess.mu.Unlock()
+
+	if !running {
+		return fmt.Errorf("session %q is not running", id)
+	}
+	if pid == 0 {
+		return fmt.Errorf("session %q has no tracked process to close", id)
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("could not find process %d: %w", pid, err)
+	}
+	if err := proc.Kill(); err != nil {
+		return fmt.Errorf("could not kill process %d: %w", pid, err)
+	}
+
+	// waitExit/the caller's own exit-path deregister will normally flip
+	// `running` to false once the kill is observed, but set it explicitly
+	// too so `wmux list` reflects it immediately rather than racing.
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+
+	return nil
+}
+
 // Spawn starts a new agent session and begins watching its combined
 // stdout/stderr stream for notification escape sequences.
 func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
@@ -197,7 +245,7 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 
 	sess := &Session{
 		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
-		cmd: cmd, running: true,
+		cmd: cmd, pid: cmd.Process.Pid, running: true,
 	}
 
 	d.mu.Lock()

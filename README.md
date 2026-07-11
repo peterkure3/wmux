@@ -71,7 +71,7 @@ Windows Terminal tab or split pane that runs `wmux attach` for you. By
 default it runs the command inside a WSL distro:
 
 ```powershell
-wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split v
+wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split right
 ```
 
 Pass `--native` to run the command directly on Windows instead — no WSL,
@@ -80,13 +80,19 @@ no `wsl.exe` involved — for agents that are native Windows installs
 the machine doesn't mean the agent runs inside it):
 
 ```powershell
-wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe --split v
+wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe --split right
 ```
 
-`--split` accepts `tab` (default), `v` (vertical split), or `h`
-(horizontal split). This only shells out to `wt.exe -w 0 ...` — it doesn't
-talk to the daemon itself; that happens once `wmux attach` starts running
-inside the pane it just opened.
+`--split` accepts `tab` (default, new tab), `right` (side-by-side split),
+or `down` (stacked split). This only shells out to `wt.exe -w 0 ...` — it
+doesn't talk to the daemon itself; that happens once `wmux attach` starts
+running inside the pane it just opened.
+
+(Note: `wt.exe`'s own `-V`/`-H` flags name the split after the
+orientation of the *dividing line*, which is the opposite of what most
+people mean by "vertical"/"horizontal" split — verified by screenshot
+that `-V` actually produces a left/right layout. `wmux pane` uses
+`right`/`down` instead specifically to avoid that confusion.)
 
 **PowerShell 5.1 quoting note for `--native --cmd`:** if the agent's path
 contains a space (e.g. a username like `C:\Users\Jane Doe\...`), avoid
@@ -95,6 +101,26 @@ native-argv passing mangles arguments with literal embedded `"`
 characters and can silently drop trailing flags like `--split`. Use the
 8.3 short path instead (no spaces, no quoting needed):
 `(New-Object -ComObject Scripting.FileSystemObject).GetFile("C:\Users\Jane Doe\...\claude.exe").ShortPath`.
+
+### Closing a session (`wmux close`)
+
+```
+wmux close --id my-project
+```
+
+Kills the session's tracked process — the daemon-owned process for
+`wmux new`, or the registered PID for `wmux attach`/`wmux pane` (the
+daemon learns the real PID at register time). This ends the agent and
+deregisters the session (`wmux list` shows `running: false`
+immediately).
+
+**It does not close the `wt.exe` pane/tab itself** if the session was
+opened via `wmux pane` — Windows Terminal leaves an inert, already-closed
+pane in its layout after the hosted process exits (confirmed even on a
+clean zero exit code, not just on error), and there's no `wt.exe`
+command-line API to remove an existing pane from outside. You'll still
+need to close that pane/tab by hand (its own close button, or
+Ctrl+Shift+W with it focused).
 
 ## Building from source
 

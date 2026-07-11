@@ -33,14 +33,25 @@ type NewSessionRequest struct {
 
 // RegisterSessionRequest is the body for POST /sessions/register — used by
 // `wmux attach`, where the daemon tracks metadata but doesn't own the
-// process (the caller keeps a real TTY attached to the agent directly).
+// process (the caller keeps a real TTY attached to the agent directly). PID
+// is the attached process's own process ID, in the daemon's local process
+// namespace — it lets `wmux close` terminate a registered (not just
+// daemon-spawned) session.
 type RegisterSessionRequest struct {
 	ID     string `json:"id"`
 	Cwd    string `json:"cwd"`
 	Distro string `json:"distro,omitempty"`
+	PID    int    `json:"pid,omitempty"`
 }
 
 // DeregisterSessionRequest is the body for POST /sessions/deregister.
 type DeregisterSessionRequest struct {
+	ID string `json:"id"`
+}
+
+// CloseSessionRequest is the body for POST /sessions/close — kills the
+// session's tracked process (daemon-owned for `wmux new`, or the
+// registered PID for `wmux attach`).
+type CloseSessionRequest struct {
 	ID string `json:"id"`
 }

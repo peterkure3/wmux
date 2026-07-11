@@ -40,6 +40,8 @@ func main() {
 		cmdAttach(os.Args[2:])
 	case "pane":
 		cmdPane(os.Args[2:])
+	case "close":
+		cmdClose(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
 	case "watch":
@@ -57,10 +59,11 @@ func usage() {
   wmux hook-codex --session ID <json>    Codex 'notify' config target (JSON as final arg)
   wmux new --id ID --cwd PATH --cmd CMD  spawn a new HEADLESS agent session (no TTY; daemon owns the pipe)
   wmux attach --id ID --cwd PATH -- CMD  run CMD interactively (real TTY), tracked by the daemon
-  wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split v|h|tab]
+  wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split right|down|tab]
                                           open a new wt.exe pane running 'wmux attach' inside WSL
-  wmux pane --native --id ID --cwd PATH --cmd CMD [--split v|h|tab]
+  wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
                                           same, but runs CMD directly on Windows, no WSL
+  wmux close --id ID                     kill a session's tracked process (does not close the wt.exe pane/tab itself)
   wmux list                              list sessions and their state
   wmux watch                             stream notifications as they arrive`)
 }
@@ -218,7 +221,20 @@ func cmdAttach(args []string) {
 		os.Exit(1)
 	}
 
-	regReq := proto.RegisterSessionRequest{ID: *id, Cwd: *cwd, Distro: *distro}
+	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd.Dir = *cwd
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux attach: could not start %q: %v\n", cmdArgs[0], err)
+		os.Exit(1)
+	}
+
+	// Register only after Start() so the real PID can be included — this is
+	// what `wmux close` later uses to kill this exact process.
+	regReq := proto.RegisterSessionRequest{ID: *id, Cwd: *cwd, Distro: *distro, PID: cmd.Process.Pid}
 	b, _ := json.Marshal(regReq)
 	resp, err := http.Post(daemonAddr+"/sessions/register", "application/json", bytes.NewReader(b))
 	if err != nil {
@@ -232,13 +248,7 @@ func cmdAttach(args []string) {
 		os.Exit(1)
 	}
 
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	cmd.Dir = *cwd
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	runErr := cmd.Run()
+	runErr := cmd.Wait()
 
 	// os.Exit skips deferred functions, so deregister explicitly on every
 	// exit path rather than relying on defer — a non-zero exit code below
@@ -281,7 +291,7 @@ func cmdPane(args []string) {
 	cwd := fs.String("cwd", "", "working directory (WSL path unless --native)")
 	distro := fs.String("distro", "", "WSL distro name (ignored with --native; defaults to your system's default WSL distro if omitted)")
 	command := fs.String("cmd", "", "command to run interactively, e.g. 'claude' (WSL mode) or a full .exe path (--native)")
-	split := fs.String("split", "tab", "'tab', 'v' (vertical split), or 'h' (horizontal split)")
+	split := fs.String("split", "tab", "'tab' (new tab), 'right' (side-by-side), or 'down' (stacked)")
 	native := fs.Bool("native", false, "run --cmd directly on Windows, no WSL — use when the agent is a native Windows install")
 	fs.Parse(args)
 
@@ -292,9 +302,16 @@ func cmdPane(args []string) {
 
 	wtArgs := []string{"-w", "0"}
 	switch *split {
-	case "v":
+	case "right":
+		// wt.exe's own "-V"/"--vertical" names this after the orientation of
+		// the dividing line (vertical line = panes side-by-side), which is
+		// the opposite of what most people mean by "vertical split" (panes
+		// stacked vertically) — verified by screenshot during testing that
+		// -V actually produces a left/right layout. Use unambiguous flag
+		// values here instead of reproducing that confusion in wmux's own
+		// CLI.
 		wtArgs = append(wtArgs, "split-pane", "-V")
-	case "h":
+	case "down":
 		wtArgs = append(wtArgs, "split-pane", "-H")
 	default:
 		wtArgs = append(wtArgs, "new-tab")
@@ -346,7 +363,11 @@ func cmdPane(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux pane: could not launch wt.exe (is Windows Terminal installed and on PATH?): %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("opened %s for session %s\n", map[string]string{"v": "vertical split", "h": "horizontal split", "tab": "new tab"}[*split], *id)
+	label, ok := map[string]string{"right": "side-by-side split", "down": "stacked split", "tab": "new tab"}[*split]
+	if !ok {
+		label = "new tab"
+	}
+	fmt.Printf("opened %s for session %s\n", label, *id)
 }
 
 // shellQuote wraps a value in single quotes for the bash -lc string built
@@ -415,6 +436,38 @@ func cmdNew(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("spawned session %s (cwd=%s)\n", info.ID, info.Cwd)
+}
+
+// cmdClose kills a session's tracked process (daemon-owned for `wmux new`,
+// or the registered PID for `wmux attach`/`wmux pane`). This ends the
+// agent and, transitively, whatever wrapping shell wt.exe is hosting for a
+// pane-opened session — but wmuxd has no way to make Windows Terminal
+// remove the now-inert pane/tab from its own UI, so that part still needs
+// closing by hand (Ctrl+Shift+W or the tab's close button).
+func cmdClose(args []string) {
+	fs := newFlagSet("close")
+	id := fs.String("id", "", "session ID")
+	fs.Parse(args)
+
+	if *id == "" {
+		fmt.Fprintln(os.Stderr, "wmux close: --id is required")
+		os.Exit(1)
+	}
+
+	req := proto.CloseSessionRequest{ID: *id}
+	b, _ := json.Marshal(req)
+	resp, err := http.Post(daemonAddr+"/sessions/close", "application/json", bytes.NewReader(b))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmux close: could not reach wmuxd: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "wmux close: daemon returned %s: %s\n", resp.Status, string(body))
+		os.Exit(1)
+	}
+	fmt.Printf("closed session %s (the wt.exe pane/tab, if any, may still need closing by hand)\n", *id)
 }
 
 func cmdList(args []string) {
