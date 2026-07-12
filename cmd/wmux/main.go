@@ -59,7 +59,16 @@ func main() {
 	}
 }
 
+const banner = `
+██╗    ██╗███╗   ███╗██╗   ██╗██╗  ██╗
+██║    ██║████╗ ████║██║   ██║╚██╗██╔╝
+██║ █╗ ██║██╔████╔██║██║   ██║ ╚███╔╝
+██║███╗██║██║╚██╔╝██║██║   ██║ ██╔██╗
+╚███╔███╔╝██║ ╚═╝ ██║╚██████╔╝██╔╝ ██╗
+ ╚══╝╚══╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝`
+
 func usage() {
+	fmt.Fprintln(os.Stderr, banner)
 	fmt.Fprintln(os.Stderr, `usage:
   wmux notify <message> --session ID     manually push a notification (testing)
   wmux hook-claude                       Claude Code Notification hook (reads stdin JSON)
