@@ -57,6 +57,37 @@ use the one that matches what you just found. Don't assume; check.
    sudo cp bin/linux-amd64/wmux bin/linux-amd64/wmuxd /usr/local/bin/
    ```
 
+## Updating
+
+After the initial install, `wmux update` replaces the whole manual dance
+(stop daemon, rebuild, copy, restart):
+
+```powershell
+wmux update --repo D:\path\to\wmux
+```
+
+It pulls the source repo (`git pull --ff-only`; skip with `--no-pull`),
+builds fresh `wmux.exe`/`wmuxd.exe`, stops `wmuxd` if it was running,
+swaps the binaries next to the running `wmux.exe`, and restarts the
+daemon detached (its log goes to `~/.wmux/wmuxd.log`). If the daemon
+wasn't running, the binaries are still swapped and it stays stopped.
+
+Where it finds the source repo, in order: `--repo`, the `WMUX_REPO`
+environment variable, then the repo path stamped into the binary by the
+update run that built it — so after one bootstrap run with `--repo`,
+plain `wmux update` works.
+
+Notes:
+
+- **Running sessions are fine.** Live panes/attaches keep executing the
+  old (renamed) binary and keep working; they pick up the new version
+  when reopened. `update` lists them as a warning and proceeds.
+- A `wmux.exe.old` file lingers in the install folder until the next
+  update collects it — the running updater can't delete itself.
+- The **WSL-resident Linux binaries are not touched** — update those
+  manually as in Installation step 3.
+- `wmux version` / `wmuxd --version` print the installed version.
+
 ## Starting the daemon
 
 Native Windows:

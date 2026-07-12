@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/peterkure/wmux/internal/proto"
@@ -26,9 +27,37 @@ func (d *Daemon) Serve(addr string) error {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/shutdown", handleShutdown)
 
 	log.Printf("wmuxd listening on http://%s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+// handleShutdown exits the daemon cleanly on request — `wmux update` uses
+// it to release wmuxd.exe's file lock before swapping the binary. State is
+// persisted after every mutation, so a hard exit loses nothing;
+// http.Server.Shutdown is deliberately not used because /events SSE
+// subscribers hold their connections open indefinitely.
+func handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	log.Printf("shutdown requested via /shutdown")
+	// Content-Length lets the client complete its read before os.Exit
+	// tears the socket down — without it the response is delimited by
+	// connection close, which the abrupt exit turns into a reset.
+	body := []byte("shutting down")
+	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+	w.Write(body)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	// Give the response a beat to reach the client before the process dies.
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.Exit(0)
+	}()
 }
 
 func (d *Daemon) handleSessions(w http.ResponseWriter, r *http.Request) {

@@ -53,6 +53,10 @@ func main() {
 		cmdList(os.Args[2:])
 	case "watch":
 		cmdWatch(os.Args[2:])
+	case "update":
+		cmdUpdate(os.Args[2:])
+	case "version":
+		cmdVersion(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -83,7 +87,9 @@ func usage() {
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
   wmux list                              list sessions and their state
-  wmux watch                             stream notifications as they arrive`)
+  wmux watch                             stream notifications as they arrive
+  wmux update [--repo PATH] [--no-pull]  rebuild from source and self-update wmux + wmuxd
+  wmux version                           print the wmux version`)
 }
 
 // cmdNotify is a manual/testing entry point — for real agent integrations,
