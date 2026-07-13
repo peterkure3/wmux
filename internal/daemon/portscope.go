@@ -1,29 +1,23 @@
 package daemon
 
 import (
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 )
 
 // processAlive reports whether a process with the given PID currently
-// exists. Shells out per-platform rather than using syscall.Signal(0)
-// (Unix-only in practice) to match this codebase's existing pattern of
-// probing external state via commands rather than raw syscalls.
+// exists, via a direct OS probe (see exec_windows.go / exec_other.go).
+// Deliberately not a tasklist/ps shell-out: pollMetadata asks this every
+// 3 seconds per session, and a transient shell-out failure must never
+// read as "process died" — that verdict irreversibly marks the session
+// exited. Only meaningful for PIDs in the daemon's own namespace; see
+// pidVisible in session.go.
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		out, err := exec.Command("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/NH").Output()
-		if err != nil {
-			return false
-		}
-		return strings.Contains(string(out), strconv.Itoa(pid))
-	}
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid)).Output()
-	return err == nil && strings.Contains(string(out), strconv.Itoa(pid))
+	return processAliveNative(pid)
 }
 
 // processTree returns rootPID plus every descendant PID, in the same
@@ -46,7 +40,7 @@ func processTree(rootPID int) map[int]bool {
 func processTreeWindows(rootPID int) map[int]bool {
 	// CSV of every process's own PID and its parent's PID; NoTypeInformation
 	// drops the PS type-name header line CSV export otherwise adds.
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command",
+	out, err := hiddenCommand("powershell.exe", "-NoProfile", "-Command",
 		"Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Csv -NoTypeInformation").Output()
 	if err != nil {
 		return map[int]bool{rootPID: true}
@@ -83,7 +77,7 @@ func parseCSVPidPairs(csv string) map[int]int {
 }
 
 func processTreeUnix(rootPID int) map[int]bool {
-	out, err := exec.Command("ps", "-eo", "pid,ppid", "--no-headers").Output()
+	out, err := hiddenCommand("ps", "-eo", "pid,ppid", "--no-headers").Output()
 	if err != nil {
 		return map[int]bool{rootPID: true}
 	}
@@ -136,7 +130,7 @@ func listeningPortsForTree(tree map[int]bool) []int {
 }
 
 func listeningPortsWindows(tree map[int]bool) []int {
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command",
+	out, err := hiddenCommand("powershell.exe", "-NoProfile", "-Command",
 		"Get-NetTCPConnection -State Listen | Select-Object LocalPort,OwningProcess | ConvertTo-Csv -NoTypeInformation").Output()
 	if err != nil {
 		return nil
@@ -171,7 +165,7 @@ func listeningPortsWindows(tree map[int]bool) []int {
 // which is the only case that matters here (wmuxd and the session it's
 // scoping always run as the same user).
 func listeningPortsUnixByPID(tree map[int]bool) []int {
-	out, err := exec.Command("ss", "-ltnp").Output()
+	out, err := hiddenCommand("ss", "-ltnp").Output()
 	if err != nil {
 		return nil
 	}

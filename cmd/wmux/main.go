@@ -327,6 +327,16 @@ func cmdPane(args []string) {
 		os.Exit(1)
 	}
 
+	// Catch the "native agent, forgot --native" mistake up front: plain
+	// mode hands --cmd to bash inside WSL, where a Windows path or .exe can
+	// never run — without this check the failure is a pane that flashes
+	// open and instantly closes (closeOnExit "always") with no readable
+	// error.
+	if !*native && looksLikeWindowsCommand(*command) {
+		fmt.Fprintf(os.Stderr, "wmux pane: --cmd %q looks like a native Windows command, but plain 'wmux pane' runs --cmd inside WSL — add --native\n", *command)
+		os.Exit(1)
+	}
+
 	// The pane runs the fixed "wmux" Windows Terminal profile instead of a
 	// commandline passed through wt.exe. A pane only honors its profile's
 	// closeOnExit setting when it runs the profile's own commandline —
@@ -538,21 +548,54 @@ func cmdPaneExec(args []string) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	start := time.Now()
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			// A non-zero exit this soon after start is almost always setup
+			// failing (command not found in the distro, wmux attach unable
+			// to reach the daemon, ...), not the agent's own business — and
+			// closeOnExit "always" would reduce whatever it printed above
+			// to an unreadable flash. Hold the pane open long enough to
+			// read it, then still propagate the real exit code.
+			if elapsed := time.Since(start); elapsed < 10*time.Second {
+				hint := ""
+				if !spec.Native {
+					hint = " — if the agent is a native Windows install, reopen with 'wmux pane --native'"
+				}
+				fmt.Fprintf(os.Stderr, "wmux pane-exec: command %q exited with code %d after %s%s\n",
+					spec.Command, exitErr.ExitCode(), elapsed.Round(100*time.Millisecond), hint)
+				time.Sleep(paneHoldOpen)
+			}
 			os.Exit(exitErr.ExitCode())
 		}
 		paneExecFail("%v", err)
 	}
 }
 
-// paneExecFail reports an error and holds the pane open long enough for a
-// human to actually read it — the pane closes the instant this process
-// exits (closeOnExit "always"), which would otherwise reduce every failure
-// to an unreadable flash.
+// looksLikeWindowsCommand reports whether a --cmd value can only run
+// natively on Windows: a drive-letter path, which bash inside a distro
+// can never exec. Deliberately nothing broader — a bare foo.exe can be
+// legitimate in plain mode via WSL interop, so that case is left to the
+// fast-failure hold inside the pane instead of being rejected up front.
+func looksLikeWindowsCommand(cmdline string) bool {
+	fields := strings.Fields(cmdline)
+	if len(fields) == 0 {
+		return false
+	}
+	first := strings.Trim(fields[0], `"'`)
+	return len(first) >= 3 && first[1] == ':' && (first[2] == '\\' || first[2] == '/')
+}
+
+// paneHoldOpen is how long a failing pane stays on screen before closing —
+// the pane closes the instant its process exits (closeOnExit "always"),
+// which would otherwise reduce every failure to an unreadable flash.
+const paneHoldOpen = 10 * time.Second
+
+// paneExecFail reports an error, holds the pane open long enough for a
+// human to actually read it, and exits.
 func paneExecFail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "wmux pane-exec: "+format+"\n", a...)
-	time.Sleep(5 * time.Second)
+	time.Sleep(paneHoldOpen)
 	os.Exit(1)
 }
 

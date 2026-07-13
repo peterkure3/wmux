@@ -114,6 +114,17 @@ func (d *Daemon) List() []proto.SessionInfo {
 	return out
 }
 
+// hiddenCommand builds an exec.Cmd with the platform's console-window
+// hiding applied — daemon shell-outs must use this instead of
+// exec.Command directly, or each one flashes a visible console window
+// whenever wmuxd runs detached without a console of its own (see
+// hideConsole).
+func hiddenCommand(name string, arg ...string) *exec.Cmd {
+	cmd := exec.Command(name, arg...)
+	hideConsole(cmd)
+	return cmd
+}
+
 // wslArgs builds the leading wsl.exe argv for a given distro, omitting
 // -d entirely when distro is empty so wsl.exe falls back to whatever the
 // user actually configured as their system default distro (`wsl.exe
@@ -131,12 +142,12 @@ func wslArgs(distro string) []string {
 // agent sessions run inside a WSL2 distro so the fleet-parity story with
 // Linux boxes holds; on any other OS (used for local dev/testing of this
 // daemon itself) it runs the command directly in a login shell.
-func buildCommand(cwd, distro, command string) *exec.Cmd {
+func buildCommand(cwd, distro, cmdline string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
-		args := append(wslArgs(distro), "--cd", cwd, "--", "bash", "-lc", command)
-		return exec.Command("wsl.exe", args...)
+		args := append(wslArgs(distro), "--cd", cwd, "--", "bash", "-lc", cmdline)
+		return hiddenCommand("wsl.exe", args...)
 	}
-	cmd := exec.Command("bash", "-lc", command)
+	cmd := hiddenCommand("bash", "-lc", cmdline)
 	cmd.Dir = cwd
 	return cmd
 }
@@ -181,10 +192,7 @@ func (d *Daemon) Deregister(id string) error {
 	if !ok {
 		return fmt.Errorf("session %q not found", id)
 	}
-	sess.mu.Lock()
-	sess.running = false
-	sess.mu.Unlock()
-	d.save()
+	d.markExited(sess)
 	return nil
 }
 
@@ -225,10 +233,7 @@ func (d *Daemon) Close(id string) error {
 	// waitExit/the caller's own exit-path deregister will normally flip
 	// `running` to false once the kill is observed, but set it explicitly
 	// too so `wmux list` reflects it immediately rather than racing.
-	sess.mu.Lock()
-	sess.running = false
-	sess.mu.Unlock()
-	d.save()
+	d.markExited(sess)
 
 	return nil
 }
@@ -279,10 +284,7 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 
 func (d *Daemon) waitExit(sess *Session) {
 	err := sess.cmd.Wait()
-	sess.mu.Lock()
-	sess.running = false
-	sess.mu.Unlock()
-	d.save()
+	d.markExited(sess)
 	if err != nil {
 		log.Printf("session %s exited: %v", sess.ID, err)
 	} else {
@@ -347,8 +349,21 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		running := sess.running
 		pid := sess.pid
 		native := sess.native
+		daemonOwned := sess.cmd != nil
 		sess.mu.Unlock()
 		if !running {
+			return
+		}
+
+		// A registered session's deregister never arrives if its whole
+		// console was torn down at once (terminal window closed, process
+		// tree hard-killed) — without this re-check the session stays
+		// "running", and this poll keeps shelling out every 3 seconds
+		// forever. Daemon-owned sessions are reaped by waitExit instead;
+		// restored ones (cmd == nil after a restart) rely on this check.
+		if !daemonOwned && pidVisible(native, sess.Command) && pid != 0 && !processAlive(pid) {
+			d.markExited(sess)
+			log.Printf("session %s: tracked process %d is gone; marking exited", sess.ID, pid)
 			return
 		}
 
@@ -361,6 +376,28 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		sess.mu.Unlock()
 		d.save()
 	}
+}
+
+// pidVisible reports whether a session's tracked PID lives in the
+// daemon's own PID namespace, i.e. whether processAlive can say anything
+// meaningful about it. True for native sessions, everything on a
+// non-Windows (WSL-resident) daemon, and daemon-spawned sessions (whose
+// PID is the Windows-side wsl.exe frontend, and which are the only kind
+// with a non-empty Command). False for a WSL-registered attach/pane
+// session on a Windows daemon: its PID comes from inside the distro,
+// where tasklist/OpenProcess can't see — the same namespace boundary
+// listeningPorts already respects via runsDirectly.
+func pidVisible(native bool, command string) bool {
+	return runsDirectly(native) || command != ""
+}
+
+// markExited flips a session to not-running and persists the change —
+// the shared tail of every exit path (deregister, close, reap, liveness).
+func (d *Daemon) markExited(sess *Session) {
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+	d.save()
 }
 
 // runsDirectly reports whether a session's own process (and thus its git
@@ -377,10 +414,10 @@ func runsDirectly(native bool) bool {
 func gitBranch(cwd, distro string, native bool) string {
 	var cmd *exec.Cmd
 	if runsDirectly(native) {
-		cmd = exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		cmd = hiddenCommand("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	} else {
 		args := append(wslArgs(distro), "--", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		cmd = exec.Command("wsl.exe", args...)
+		cmd = hiddenCommand("wsl.exe", args...)
 	}
 	out, err := cmd.Output()
 	if err != nil {
@@ -414,7 +451,7 @@ func listeningPorts(distro string, pid int, native bool) []int {
 	}
 
 	args := append(wslArgs(distro), "--", "ss", "-ltn")
-	out, err := exec.Command("wsl.exe", args...).Output()
+	out, err := hiddenCommand("wsl.exe", args...).Output()
 	if err != nil {
 		return nil
 	}

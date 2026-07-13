@@ -113,7 +113,14 @@ func (d *Daemon) load() {
 
 	restored := 0
 	for _, p := range snap {
-		running := p.Running && p.PID != 0 && processAlive(p.PID)
+		running := p.Running && p.PID != 0
+		// Only re-check liveness for PIDs in our own namespace — a
+		// WSL-registered session's PID means nothing to this side's
+		// process table, and a wrong verdict here either kills a live
+		// session's tracking or resurrects a dead one (see pidVisible).
+		if running && pidVisible(p.Native, p.Command) {
+			running = processAlive(p.PID)
+		}
 
 		sess := &Session{
 			ID: p.ID, Cwd: p.Cwd, Distro: p.Distro, Command: p.Command,
