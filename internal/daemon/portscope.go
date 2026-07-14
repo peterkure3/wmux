@@ -20,6 +20,20 @@ func processAlive(pid int) bool {
 	return processAliveNative(pid)
 }
 
+// processAliveWSL probes a PID inside a WSL distro's own namespace, for
+// sessions processAlive can't see at all (see pidVisible in session.go).
+// `kill -0` needs no signal-sending privilege beyond same-user, and exits
+// 0 iff the PID exists and is reachable. Callers must debounce failures —
+// a wsl.exe shell-out can fail transiently (distro momentarily
+// unresponsive) same as any other shell-out this package makes.
+func processAliveWSL(distro string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	args := append(wslArgs(distro), "--", "kill", "-0", strconv.Itoa(pid))
+	return hiddenCommand("wsl.exe", args...).Run() == nil
+}
+
 // processTree returns rootPID plus every descendant PID, in the same
 // process namespace as the daemon's own process. Used to scope
 // listeningPorts to a session's actual process tree instead of every

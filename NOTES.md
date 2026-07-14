@@ -42,15 +42,38 @@ runs `wsl.exe -d <distro> -- bash -lc "wmux attach ..."` inside the new
 pane. `wmux pane` itself never talks to the daemon — it's a pure "build
 and launch a wt.exe command" utility, meant to run from PowerShell.
 
-**Deployment topology:** recommend running `wmuxd`/`wmux` from the
-**Linux build**, resident *inside* the WSL2 distro where agents actually
-run — not the Windows-native build shelling into WSL via `wsl.exe` for
-every operation. Rationale: Claude Code/Codex hooks fire from inside WSL,
-and reaching a Windows-hosted daemon's port from inside WSL depends on
-WSL2's mirrored networking mode being active, which isn't guaranteed.
-Same-namespace `127.0.0.1` sidesteps the question entirely. The
-Windows-native build is still useful for orchestration from PowerShell
-(`wmux pane`, `wmux new --distro ...` via `wsl.exe`).
+**Deployment topology — as originally recommended vs. what's actually
+running.** This section originally recommended running `wmuxd`/`wmux`
+from the **Linux build**, resident *inside* the WSL2 distro where agents
+actually run — not the Windows-native build shelling into WSL via
+`wsl.exe` for every operation. Rationale: Claude Code/Codex hooks fire
+from inside WSL, and reaching a Windows-hosted daemon's port from inside
+WSL depends on WSL2's mirrored networking mode being active, which isn't
+guaranteed. Same-namespace `127.0.0.1` sidesteps the question entirely.
+
+That recommendation was never adopted. The real deployment (verified
+2026-07-14, `C:\wmux\wmuxd.exe` + `wmux.exe`, both Windows-native builds)
+took the other fork instead: `claude.exe` itself turned out to be a
+**native Windows install** on this machine (see the `--native` follow-up
+below), so every session actually run through this daemon is
+`wmux pane --native`/`wmux attach --native` — same OS namespace as
+`wmuxd`, no WSL hop, no loopback question to answer. Confirmed via
+`state.json`: all 13 sessions on record have `"native": true,
+"distro": ""`; zero WSL-targeted sessions have ever run against this
+daemon. `wmuxd` has no autostart entry (no Task Scheduler task, no
+Startup-folder shortcut) — it's started manually or via `wmux update`'s
+restart, per session.
+
+Practical upshot: the WSL→Windows loopback failure described below under
+"What's tested vs. not" is real in the code but currently a **latent, not
+live**, issue — plain (non-`--native`) `wmux pane`/`wmux attach` sessions
+would hit it the moment someone runs one against this Windows-native
+daemon, since the inner `wmux attach` execing inside WSL has no route
+back to `127.0.0.1:47823` on the host. Nothing currently exercises that
+path. If a WSL-targeted (non-native) agent enters the picture, either
+adopt the original Linux-build-resident recommendation above, or give the
+Windows-native daemon a WSL-reachable bind address instead of pure
+`127.0.0.1`.
 
 **Hook wire formats differ per agent** (checked against current docs, not
 assumed from training data):
@@ -120,7 +143,10 @@ assumed from training data):
   `wmuxd.exe`. Confirmed **Windows → WSL via `127.0.0.1` does work**
   (WSL2's built-in localhost-forwarding, unrelated to mirrored mode).
   This validates the README's recommendation to run `wmuxd`/`wmux` from
-  the Linux build resident inside the distro.
+  the Linux build resident inside the distro — **a recommendation the
+  actual deployment doesn't follow**; see "Deployment topology" above for
+  how that fork was resolved differently in practice, and why it's fine
+  for now.
 
 **Bug found and fixed during this pass:**
 

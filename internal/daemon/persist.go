@@ -112,6 +112,8 @@ func (d *Daemon) load() {
 	}
 
 	restored := 0
+	var toPoll []*Session
+	d.mu.Lock()
 	for _, p := range snap {
 		running := p.Running && p.PID != 0
 		// Only re-check liveness for PIDs in our own namespace — a
@@ -131,8 +133,17 @@ func (d *Daemon) load() {
 		restored++
 
 		if running {
-			go d.pollMetadata(sess)
+			toPoll = append(toPoll, sess)
 		}
+	}
+	d.mu.Unlock()
+
+	// Started outside the lock, matching Register/Spawn's pattern —
+	// pollMetadata only ever touches sess.mu and d.mu via d.save(), never
+	// d.mu directly, but holding d.mu across goroutine starts is needless
+	// scope creep.
+	for _, sess := range toPoll {
+		go d.pollMetadata(sess)
 	}
 
 	if restored > 0 {

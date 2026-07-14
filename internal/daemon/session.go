@@ -29,14 +29,15 @@ type Session struct {
 	Distro  string
 	Command string
 
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	pid      int
-	native   bool
-	branch   string
-	ports    []int
-	lastNote string
-	running  bool
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	pid        int
+	native     bool
+	branch     string
+	ports      []int
+	lastNote   string
+	running    bool
+	deadStreak int // consecutive failed WSL liveness probes; see pollMetadata
 }
 
 func (s *Session) Info() proto.SessionInfo {
@@ -361,10 +362,37 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		// "running", and this poll keeps shelling out every 3 seconds
 		// forever. Daemon-owned sessions are reaped by waitExit instead;
 		// restored ones (cmd == nil after a restart) rely on this check.
-		if !daemonOwned && pidVisible(native, sess.Command) && pid != 0 && !processAlive(pid) {
-			d.markExited(sess)
-			log.Printf("session %s: tracked process %d is gone; marking exited", sess.ID, pid)
-			return
+		if !daemonOwned && pid != 0 {
+			var alive bool
+			if pidVisible(native, sess.Command) {
+				alive = processAlive(pid)
+			} else {
+				// WSL-registered session (plain `wmux attach`/`wmux pane`):
+				// this PID lives inside the distro's own PID namespace,
+				// invisible to processAlive (see pidVisible). Shelling into
+				// the distro is the only way to check it at all, but unlike
+				// the direct OS probe above, a wsl.exe failure here can mean
+				// the distro was transiently unresponsive rather than the
+				// process actually gone — so this requires two consecutive
+				// misses before it's trusted, instead of acting on one.
+				if processAliveWSL(sess.Distro, pid) {
+					sess.mu.Lock()
+					sess.deadStreak = 0
+					sess.mu.Unlock()
+					alive = true
+				} else {
+					sess.mu.Lock()
+					sess.deadStreak++
+					streak := sess.deadStreak
+					sess.mu.Unlock()
+					alive = streak < 2
+				}
+			}
+			if !alive {
+				d.markExited(sess)
+				log.Printf("session %s: tracked process %d is gone; marking exited", sess.ID, pid)
+				return
+			}
 		}
 
 		branch := gitBranch(sess.Cwd, sess.Distro, native)
