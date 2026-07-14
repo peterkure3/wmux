@@ -55,6 +55,8 @@ func main() {
 		cmdWatch(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
+	case "autostart":
+		cmdAutostart(os.Args[2:])
 	case "version":
 		cmdVersion(os.Args[2:])
 	default:
@@ -89,6 +91,8 @@ func usage() {
   wmux list                              list sessions and their state
   wmux watch                             stream notifications as they arrive
   wmux update [--repo PATH] [--no-pull]  rebuild from source and self-update wmux + wmuxd
+  wmux autostart install|uninstall|status
+                                          register/remove wmuxd as a Task Scheduler logon task
   wmux version                           print the wmux version`)
 }
 
