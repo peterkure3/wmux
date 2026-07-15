@@ -51,7 +51,6 @@ type unreadNote struct {
 
 type sidebarModel struct {
 	sessions []proto.SessionInfo
-	winAlive map[string]bool // session ID -> visible console window found (native only)
 	unread   map[string]unreadNote
 
 	selected int
@@ -73,7 +72,6 @@ type sidebarModel struct {
 // messages
 type sessionsMsg []proto.SessionInfo
 type evtMsg proto.Event
-type winAliveMsg map[string]bool
 type tickMsg time.Time
 type daemonDownMsg struct{}
 type statusMsg string
@@ -81,7 +79,6 @@ type statusMsg string
 func cmdSidebarUI(args []string) {
 	home, _ := os.UserHomeDir()
 	m := sidebarModel{
-		winAlive: map[string]bool{},
 		unread:   map[string]unreadNote{},
 		daemonOK: true,
 		newCwd:   home,
@@ -140,23 +137,6 @@ func fetchSessionsCmd() tea.Msg {
 		return daemonDownMsg{}
 	}
 	return sessionsMsg(ss)
-}
-
-// probeWindowsCmd checks which native running sessions still own a visible
-// console window — the sidebar's "!" state. WSL sessions are skipped for
-// the same reason `wmux panes` reports them as "wsl": their PID means
-// nothing to the Windows window table.
-func probeWindowsCmd(ss []proto.SessionInfo) tea.Cmd {
-	return func() tea.Msg {
-		alive := map[string]bool{}
-		for _, s := range ss {
-			if s.Native && s.Running && s.PID != 0 {
-				_, _, ok := findWindowForPID(s.PID)
-				alive[s.ID] = ok
-			}
-		}
-		return winAliveMsg(alive)
-	}
 }
 
 func focusCmd(id string) tea.Cmd {
@@ -232,11 +212,10 @@ func (m sidebarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		m.daemonOK = true
 		m.setSessions([]proto.SessionInfo(msg))
-		return m, probeWindowsCmd(m.sessions)
+		return m, nil
 
 	case evtMsg:
 		evt := proto.Event(msg)
-		var cmd tea.Cmd
 		switch evt.Type {
 		case proto.EventNotify:
 			if evt.Notify != nil {
@@ -246,13 +225,8 @@ func (m sidebarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case proto.EventSessions:
 			m.daemonOK = true
 			m.setSessions(evt.Sessions)
-			cmd = probeWindowsCmd(m.sessions)
 		}
-		return m, tea.Batch(waitEvent(m.events), cmd)
-
-	case winAliveMsg:
-		m.winAlive = map[string]bool(msg)
-		return m, nil
+		return m, waitEvent(m.events)
 
 	case tickMsg:
 		return m, tea.Batch(fetchSessionsCmd, sidebarTick())
@@ -526,12 +500,8 @@ func (m sidebarModel) bodyLines() (lines []string, owner []int) {
 			marker = "▸ "
 		}
 		dot, dotColor := "●", aGreen
-		switch {
-		case !s.Running:
+		if !s.Running {
 			dot, dotColor = "○", aDim
-		case s.Native && s.PID != 0 && m.winAlive != nil && !m.winAlive[s.ID] && len(m.winAlive) > 0:
-			// running, but no visible console window found for its PID
-			dot, dotColor = "!", aYellow
 		}
 		tag := ""
 		if !s.Native {

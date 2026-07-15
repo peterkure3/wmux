@@ -32,11 +32,12 @@ const sidebarTitle = "wmux-sidebar"
 // same wt.exe invocation, sized so the sidebar keeps ~22% of the tab.
 func cmdSidebar(args []string) {
 	fs := newFlagSet("sidebar")
-	with := fs.String("with", "", "also open a first agent pane running this command (native Windows)")
+	with := fs.String("with", "", "open a first agent pane running this command instead of the default shell pane")
 	cwd := fs.String("cwd", "", "working directory for --with")
 	id := fs.String("id", "", "session ID for --with (defaults to the cwd's base name)")
 	distro := fs.String("distro", "", "WSL distro for --with (implies a WSL pane)")
 	native := fs.Bool("native", false, "run --with directly on Windows, no WSL")
+	bare := fs.Bool("bare", false, "open only the sidebar, without a shell pane beside it")
 	fs.Parse(args)
 
 	if err := ensureWTProfileFragment(); err != nil {
@@ -70,20 +71,29 @@ func cmdSidebar(args []string) {
 			os.Exit(1)
 		}
 		// One chained wt.exe invocation: the split targets the tab the
-		// first subcommand just created, and -s 0.78 gives the new (agent)
-		// pane 78% of the width, leaving the sidebar 22%.
-		wtArgs = append(wtArgs, ";", "split-pane", "-V", "-s", "0.78",
+		// first subcommand just created, and -s 0.80 gives the new (agent)
+		// pane 80% of the width, leaving the sidebar 20%.
+		wtArgs = append(wtArgs, ";", "split-pane", "-V", "-s", "0.80",
 			"--title", paneID, "--suppressApplicationTitle", "--profile", "wmux")
+	} else if !*bare {
+		// No agent pane requested: still open a companion pane running the
+		// user's default WT profile, so the sidebar comes up at its
+		// intended ~20% width instead of filling the whole tab until the
+		// first split arrives.
+		wtArgs = append(wtArgs, ";", "split-pane", "-V", "-s", "0.80")
 	}
 
 	if err := exec.Command("wt.exe", wtArgs...).Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "wmux sidebar: could not launch wt.exe (is Windows Terminal installed and on PATH?): %v\n", err)
 		os.Exit(1)
 	}
-	if *with != "" {
-		fmt.Println("opened sidebar tab with agent pane")
-	} else {
-		fmt.Println("opened sidebar tab (open agent panes with 'wmux pane --split right' or the sidebar's n key)")
+	switch {
+	case *with != "":
+		fmt.Println("opened sidebar with agent pane")
+	case *bare:
+		fmt.Println("opened sidebar (open agent panes with 'wmux pane --split right' or the sidebar's n key)")
+	default:
+		fmt.Println("opened sidebar with shell pane (open agent panes with 'wmux pane --split right' or the sidebar's n key)")
 	}
 }
 

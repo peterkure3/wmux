@@ -38,7 +38,7 @@ wmux sidebar        launcher — opens a WT pane via the "wmux" profile with
 wmux sidebar-ui     the TUI (Bubble Tea), runs inside that pane
   ├─ GET /sessions        initial snapshot
   ├─ GET /events (SSE)    live push: notify + session lifecycle (typed envelope)
-  ├─ poll every 2s        fallback refresh + window-liveness probe
+  ├─ poll every 2s        fallback refresh (daemon restarts, missed pushes)
   └─ actions
        focus  → same UIA path as `wmux focus --id` (shared focusSessionByID)
        close  → POST /sessions/close (with y/n confirm)
@@ -79,10 +79,13 @@ liveness and daemon restarts.
 
 Row anatomy:
 
-- Dot: `●` green = running, `○` dim = exited, `!` yellow = running but no
-  visible console window found for its PID (native sessions only; WSL
-  sessions show `wsl` instead — their PID means nothing to the Windows
-  window table, same rule as `wmux panes`).
+- Dot: `●` green = running, `○` dim = exited. (An earlier revision had a
+  `!` "running but no window" state fed by `findWindowForPID`, but that
+  probe is meaningless for WT-hosted panes — the pane's window belongs to
+  WindowsTerminal.exe, not the agent PID, so every healthy WT pane showed
+  `!`. The probe only answers for standalone-console sessions, which is
+  `wmux panes`'s documented job, not the sidebar's.) WSL sessions are
+  tagged `wsl`.
 - Line 1: session ID + git branch.
 - Line 2: cwd tail + listening ports.
 - Line 3 only when there's an unread notification: `✉` + snippet + age.
@@ -106,12 +109,14 @@ wt.exe's CLI can only split right (`-V`) or down (`-H`) of the focused
 pane — no split-left, no swap-pane from the command line. So the sidebar
 guarantees "leftmost" only by being the tab's first pane:
 
-- `wmux sidebar` — new tab, sidebar fills it; agent panes split right
-  from it.
+- `wmux sidebar` — new tab: sidebar (~20%) plus a companion pane running
+  the user's default WT profile (a plain shell), in one chained wt.exe
+  invocation (`new-tab ... ; split-pane -V -s 0.80`) — without the
+  companion the sidebar would fill the whole tab until the first split
+  arrives. `--bare` skips the companion.
 - `wmux sidebar --with "<cmd>" --cwd PATH [--id ID] [--native] [--distro D]`
-  — one shot: sidebar tab + first agent pane in a single chained wt.exe
-  invocation (`new-tab ... ; split-pane -V -s 0.78 ...`), leaving the
-  sidebar 22% of the width.
+  — the companion pane runs an agent session (wmux profile, registered
+  with the daemon) instead of a shell.
 - A sidebar opened when panes already exist lands right of the focused
   pane; WT offers no CLI fix — swap manually in-terminal if it matters.
 

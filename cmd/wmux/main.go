@@ -96,9 +96,10 @@ func usage() {
                                           open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
                                           same, but runs CMD directly on Windows, no WSL
-  wmux sidebar                           open the live session sidebar as a new tab's leftmost pane
+  wmux sidebar [--bare]                  open the live session sidebar (~20% wide) plus a default shell pane;
+                                          --bare opens only the sidebar
   wmux sidebar --with CMD --cwd PATH [--id ID] [--native] [--distro D]
-                                          same, plus a first agent pane split right of it (sidebar keeps ~22%)
+                                          same, but the right pane runs an agent session instead of a shell
   wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
