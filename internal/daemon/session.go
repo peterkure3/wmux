@@ -57,7 +57,7 @@ type Daemon struct {
 	sessions map[string]*Session
 
 	subMu sync.Mutex
-	subs  map[chan proto.NotifyEvent]struct{}
+	subs  map[chan proto.Event]struct{}
 
 	// panes holds pending pane specs (see panes.go) — the handshake between
 	// `wmux pane` and the `wmux pane-exec` process inside the new wt.exe pane.
@@ -73,29 +73,29 @@ type Daemon struct {
 func New(statePath string) *Daemon {
 	d := &Daemon{
 		sessions:  make(map[string]*Session),
-		subs:      make(map[chan proto.NotifyEvent]struct{}),
+		subs:      make(map[chan proto.Event]struct{}),
 		statePath: statePath,
 	}
 	d.load()
 	return d
 }
 
-func (d *Daemon) Subscribe() chan proto.NotifyEvent {
-	ch := make(chan proto.NotifyEvent, 32)
+func (d *Daemon) Subscribe() chan proto.Event {
+	ch := make(chan proto.Event, 32)
 	d.subMu.Lock()
 	d.subs[ch] = struct{}{}
 	d.subMu.Unlock()
 	return ch
 }
 
-func (d *Daemon) Unsubscribe(ch chan proto.NotifyEvent) {
+func (d *Daemon) Unsubscribe(ch chan proto.Event) {
 	d.subMu.Lock()
 	delete(d.subs, ch)
 	d.subMu.Unlock()
 	close(ch)
 }
 
-func (d *Daemon) publish(evt proto.NotifyEvent) {
+func (d *Daemon) publish(evt proto.Event) {
 	d.subMu.Lock()
 	defer d.subMu.Unlock()
 	for ch := range d.subs {
@@ -104,6 +104,18 @@ func (d *Daemon) publish(evt proto.NotifyEvent) {
 		default: // slow subscriber; drop rather than block the watcher
 		}
 	}
+}
+
+// publishNotify pushes a notification to every /events subscriber.
+func (d *Daemon) publishNotify(evt proto.NotifyEvent) {
+	d.publish(proto.Event{Type: proto.EventNotify, Notify: &evt})
+}
+
+// publishSessions pushes the full session list to every /events subscriber.
+// Called on every lifecycle transition and metadata change so a sidebar/tray
+// UI can re-render from push alone instead of re-polling GET /sessions.
+func (d *Daemon) publishSessions() {
+	d.publish(proto.Event{Type: proto.EventSessions, Sessions: d.List()})
 }
 
 func (d *Daemon) List() []proto.SessionInfo {
@@ -180,6 +192,7 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 
 	go d.pollMetadata(sess)
 	d.save()
+	d.publishSessions()
 
 	return sess, nil
 }
@@ -280,6 +293,7 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	go d.pollMetadata(sess)
 	go d.waitExit(sess)
 	d.save()
+	d.publishSessions()
 
 	return sess, nil
 }
@@ -321,7 +335,7 @@ func (d *Daemon) watchOutput(sess *Session, r io.Reader) {
 				sess.mu.Unlock()
 
 				evt := proto.NotifyEvent{SessionID: sess.ID, Body: body, Time: time.Now()}
-				d.publish(evt)
+				d.publishNotify(evt)
 				log.Printf("[notify] session=%s body=%q", sess.ID, body)
 
 				pending = pending[loc[1]:] // drop everything through the matched sequence
@@ -400,11 +414,30 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		ports := listeningPorts(sess.Distro, pid, native)
 
 		sess.mu.Lock()
+		changed := branch != sess.branch || !equalInts(ports, sess.ports)
 		sess.branch = branch
 		sess.ports = ports
 		sess.mu.Unlock()
-		d.save()
+
+		// Only persist and push on an actual diff — this ticks every 3s per
+		// session, and subscribers (the sidebar) re-render on every push.
+		if changed {
+			d.save()
+			d.publishSessions()
+		}
 	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // pidVisible reports whether a session's tracked PID lives in the
@@ -427,6 +460,7 @@ func (d *Daemon) markExited(sess *Session) {
 	sess.running = false
 	sess.mu.Unlock()
 	d.save()
+	d.publishSessions()
 }
 
 // runsDirectly reports whether a session's own process (and thus its git

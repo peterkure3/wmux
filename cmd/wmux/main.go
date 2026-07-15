@@ -45,6 +45,10 @@ func main() {
 		cmdPane(os.Args[2:])
 	case "pane-exec":
 		cmdPaneExec(os.Args[2:])
+	case "sidebar":
+		cmdSidebar(os.Args[2:])
+	case "sidebar-ui":
+		cmdSidebarUI(os.Args[2:])
 	case "focus":
 		cmdFocus(os.Args[2:])
 	case "close":
@@ -89,6 +93,9 @@ func usage() {
                                           open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
                                           same, but runs CMD directly on Windows, no WSL
+  wmux sidebar                           open the live session sidebar as a new tab's leftmost pane
+  wmux sidebar --with CMD --cwd PATH [--id ID] [--native] [--distro D]
+                                          same, plus a first agent pane split right of it (sidebar keeps ~22%)
   wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
@@ -336,6 +343,10 @@ func cmdPane(args []string) {
 		fmt.Fprintln(os.Stderr, "wmux pane: --id, --cwd, and --cmd are required")
 		os.Exit(1)
 	}
+	if *id == sidebarTitle {
+		fmt.Fprintf(os.Stderr, "wmux pane: session ID %q is reserved for the sidebar itself\n", sidebarTitle)
+		os.Exit(1)
+	}
 
 	// Catch the "native agent, forgot --native" mistake up front: plain
 	// mode hands --cmd to bash inside WSL, where a Windows path or .exe can
@@ -365,16 +376,8 @@ func cmdPane(args []string) {
 	// File the spec before launching wt.exe so pane-exec can't beat it to
 	// the daemon.
 	spec := proto.PaneSpec{ID: *id, Cwd: *cwd, Distro: *distro, Command: *command, Native: *native}
-	b, _ := json.Marshal(spec)
-	resp, err := http.Post(daemonAddr+"/panes/pending", "application/json", bytes.NewReader(b))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wmux pane: could not reach wmuxd (is it running?): %v\n", err)
-		os.Exit(1)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "wmux pane: daemon returned %s: %s\n", resp.Status, string(body))
+	if err := filePaneSpec(spec); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux pane: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -498,6 +501,13 @@ func cmdPaneExec(args []string) {
 		paneExecFail("could not read console title: %v", err)
 	}
 	id := strings.TrimSpace(title)
+
+	// The reserved sidebar title means "run the sidebar TUI here" — no pane
+	// spec, no wmux attach, no session registration (see cmdSidebar).
+	if id == sidebarTitle {
+		cmdSidebarUI(nil)
+		return
+	}
 
 	// Claim with a few retries: on a loaded machine this pane can start
 	// before `wmux pane`'s own POST /panes/pending has landed.
@@ -684,25 +694,33 @@ func cmdFocus(args []string) {
 		fmt.Printf("moved focus %s\n", *dir)
 
 	case *id != "" && *dir == "":
-		script := fmt.Sprintf(focusScript, psQuote(*id))
-		// Read stdout only — powershell.exe emits CLIXML progress noise on
-		// stderr ("Preparing modules for first use...") that would drown the
-		// script's own ok/not-found verdict in a combined stream.
-		out, err := exec.Command("powershell.exe", "-NoProfile", "-EncodedCommand", psEncodedCommand(script)).Output()
-		switch result := strings.TrimSpace(string(out)); result {
-		case "ok":
-			fmt.Printf("focused session %s\n", *id)
-		case "not-found":
-			fmt.Fprintf(os.Stderr, "wmux focus: no pane or tab titled %q found in any Windows Terminal window\n", *id)
-			os.Exit(1)
-		default:
-			fmt.Fprintf(os.Stderr, "wmux focus: %v: %s\n", err, result)
+		if err := focusSessionByID(*id); err != nil {
+			fmt.Fprintf(os.Stderr, "wmux focus: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Printf("focused session %s\n", *id)
 
 	default:
 		fmt.Fprintln(os.Stderr, "wmux focus: exactly one of --id or --dir is required")
 		os.Exit(1)
+	}
+}
+
+// focusSessionByID runs the UIA focus script against a session ID — shared
+// by `wmux focus --id` and the sidebar's Enter/click action.
+func focusSessionByID(id string) error {
+	script := fmt.Sprintf(focusScript, psQuote(id))
+	// Read stdout only — powershell.exe emits CLIXML progress noise on
+	// stderr ("Preparing modules for first use...") that would drown the
+	// script's own ok/not-found verdict in a combined stream.
+	out, err := exec.Command("powershell.exe", "-NoProfile", "-EncodedCommand", psEncodedCommand(script)).Output()
+	switch result := strings.TrimSpace(string(out)); result {
+	case "ok":
+		return nil
+	case "not-found":
+		return fmt.Errorf("no pane or tab titled %q found in any Windows Terminal window", id)
+	default:
+		return fmt.Errorf("%v: %s", err, result)
 	}
 }
 
@@ -791,20 +809,28 @@ func cmdClose(args []string) {
 		os.Exit(1)
 	}
 
-	req := proto.CloseSessionRequest{ID: *id}
+	if err := closeSession(*id); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux close: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
+}
+
+// closeSession asks the daemon to kill a session's tracked process —
+// shared by `wmux close` and the sidebar's x action.
+func closeSession(id string) error {
+	req := proto.CloseSessionRequest{ID: id}
 	b, _ := json.Marshal(req)
 	resp, err := http.Post(daemonAddr+"/sessions/close", "application/json", bytes.NewReader(b))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wmux close: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("could not reach wmuxd: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "wmux close: daemon returned %s: %s\n", resp.Status, string(body))
-		os.Exit(1)
+		return fmt.Errorf("daemon returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
+	return nil
 }
 
 func cmdList(args []string) {
@@ -847,10 +873,14 @@ func cmdWatch(args []string) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) > 6 && line[:6] == "data: " {
-			var evt proto.NotifyEvent
-			if err := json.Unmarshal([]byte(line[6:]), &evt); err == nil {
-				fmt.Printf("[%s] %s: %s\n", evt.Time.Format("15:04:05"), evt.SessionID, evt.Body)
+			var evt proto.Event
+			if err := json.Unmarshal([]byte(line[6:]), &evt); err == nil &&
+				evt.Type == proto.EventNotify && evt.Notify != nil {
+				n := evt.Notify
+				fmt.Printf("[%s] %s: %s\n", n.Time.Format("15:04:05"), n.SessionID, n.Body)
 			}
+			// "sessions" lifecycle events are for UI clients (wmux sidebar);
+			// watch stays a notification tail.
 		}
 	}
 }

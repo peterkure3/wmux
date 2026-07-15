@@ -9,7 +9,8 @@ CLI you wire into agent hooks and use to inspect state.
 Status: daemon + CLI are working end-to-end, verified on a real Windows 11
 + WSL2 machine (spawn → OSC-9 parse → live SSE push → `list`/`watch`
 output, `wmux pane`'s full `wt.exe`/`wsl.exe` quoting chain, both hook
-commands). Tray/sidebar UI is not built yet — see "Next steps" below.
+commands). `wmux sidebar` opens a live session sidebar as a Windows
+Terminal pane — see `docs/sidebar-design.md`.
 
 **Note:** `--distro` (for `wmux new`/`wmux pane`) is optional — if omitted,
 `wsl.exe` uses your system's actual default distro (`wsl.exe --status`),
@@ -270,9 +271,18 @@ daemon, it's only the hook direction that needs mirrored mode.
    process-list checks. Originally couldn't remove the `wt.exe` pane
    itself; superseded by the profile flow in (8), which makes panes
    close themselves.
-5. **Tray/sidebar UI** — a small Wails or Tauri app subscribing to
-   `GET /events` (SSE) and `GET /sessions`, showing a notification badge
-   and the sidebar metadata (branch/ports/last note) per session.
+5. ~~**Tray/sidebar UI**~~ — done, as a TUI pane instead of a Wails/Tauri
+   app (single binary, lives inside the WT layout; see
+   `docs/sidebar-design.md` for the reasoning). `wmux sidebar` opens a
+   live session sidebar as a new tab's leftmost pane: running state, git
+   branch, cwd, ports, unread-notification badges, plus Enter/click to
+   focus a session's pane, `x` to close it, and `n` to open a new native
+   agent pane. Backed by a new typed `/events` envelope
+   (`{"type":"notify"|"sessions",...}`) that pushes session lifecycle and
+   branch/port changes, so the sidebar re-renders from SSE push instead
+   of polling. `wmux sidebar --with CMD --cwd PATH [--native]` opens the
+   sidebar plus a first agent pane (sidebar keeps ~22% width) in one
+   shot. A native-window UI can still slot in later against the same API.
 6. ~~**Port scoping**~~ — done, and fixed a real latent bug found while
    implementing it: a **native** Windows session's git branch/port
    polling was always shelling into WSL regardless (the daemon only ever

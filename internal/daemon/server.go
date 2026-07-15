@@ -204,7 +204,11 @@ func (d *Daemon) handleNotify(w http.ResponseWriter, r *http.Request) {
 		sess.mu.Unlock()
 	}
 
-	d.publish(evt)
+	d.publishNotify(evt)
+	// lastNote is part of SessionInfo, so the session list changed too.
+	if ok {
+		d.publishSessions()
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 

@@ -402,6 +402,50 @@ comparison — wmux's wt.exe-sidecar approach can't target/resize/inspect
 arbitrary panes (that ceiling needs owning ConPTY), but self-closing
 panes + focus-by-id cover the agent-workflow essentials.
 
+**Follow-up feature (2026-07-15): `wmux sidebar` — the sidebar UI.**
+Design in `docs/sidebar-design.md` (the design of record). Built as a
+Bubble Tea TUI inside a WT pane rather than the Wails/Tauri app the
+original "Next steps" imagined — single binary, no webview toolchain,
+lives inside the same WT layout as the panes it lists. Key pieces:
+
+- **Typed SSE envelope.** `GET /events` now streams
+  `{"type":"notify","notify":{...}}` / `{"type":"sessions","sessions":[...]}`
+  (`proto.Event`). The daemon publishes `sessions` on every lifecycle
+  transition (spawn/register/deregister/close/reap/liveness) and on
+  branch/port diffs in `pollMetadata` (which now also only calls `save()`
+  on an actual diff, instead of every 3s tick). Verified live: attach +
+  exit + notify produced 3 `sessions` events and 1 `notify` event on one
+  SSE connection; `wmux watch` updated for the envelope and verified.
+- **Launcher trick.** `wmux sidebar` reuses the `wmux` WT profile flow
+  with the reserved title `wmux-sidebar`; `pane-exec` recognizes that
+  title and runs the TUI in-process — no pane spec, no `wmux attach`, so
+  the sidebar never registers as a session. `wmux pane`/`wmux sidebar
+  --with` reject `wmux-sidebar` as a session ID. `--with CMD --cwd PATH`
+  opens sidebar + first agent pane via one chained wt.exe invocation
+  (`new-tab ... ; split-pane -V -s 0.78 ...`) so the sidebar keeps ~22%.
+  Leftmost placement is only guaranteed sidebar-first: wt.exe CLI has no
+  split-left and no swap-pane.
+- **TUI actions** reuse the CLI's own paths, factored into helpers:
+  `focusSessionByID` (UIA), `closeSession` (POST /sessions/close),
+  `filePaneSpec` (POST /panes/pending). `n` opens a native pane after a
+  `move-focus right` nudge so the split lands in the agent area, not the
+  sidebar column.
+- **Fixed a latent `syscall.NewCallback` leak** in `findWindowForPID`
+  while wiring the window-liveness probe: the callback was created per
+  call, and Windows never releases NewCallback allocations (hard
+  process-wide cap) — fine for one-shot `wmux panes`, fatal for a sidebar
+  probing every 2s. Now created once via `sync.Once` with state passed
+  through a mutex-guarded package var.
+- **First external dependency**: `github.com/charmbracelet/bubbletea`
+  (raw mode, resize, mouse tracking). Styling is raw ANSI, no lipgloss.
+
+Verified: full build/vet, headless render smoke test (TUI fetched and
+rendered all 21 persisted sessions with no TTY attached), deployed via
+`wmux update --no-pull`, sidebar launched into the live WT window and its
+`pane-exec` process confirmed still alive past the 10s failure-hold
+window. Not yet exercised: interactive keys/mouse (needs a human at the
+terminal), `--with`, and the TUI's `n` prompt flow.
+
 **Still not tested:**
 
 - Real Codex hook wiring end-to-end with a live Codex invocation (Codex

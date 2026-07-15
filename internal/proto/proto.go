@@ -12,6 +12,27 @@ type NotifyEvent struct {
 	Time      time.Time `json:"time"`
 }
 
+// Event is the envelope streamed over GET /events. Exactly one payload
+// field is set, matching Type:
+//
+//	{"type":"notify","notify":{...NotifyEvent...}}
+//	{"type":"sessions","sessions":[...SessionInfo...]}
+//
+// "sessions" events fire on every session lifecycle transition and on
+// branch/port changes, so a sidebar/tray UI can re-render from push alone
+// instead of polling GET /sessions.
+type Event struct {
+	Type     string        `json:"type"`
+	Notify   *NotifyEvent  `json:"notify,omitempty"`
+	Sessions []SessionInfo `json:"sessions,omitempty"`
+}
+
+// Event types for Event.Type.
+const (
+	EventNotify   = "notify"
+	EventSessions = "sessions"
+)
+
 // SessionInfo is the public, JSON-serializable view of a session, returned
 // by GET /sessions and embedded in notify events for UI consumption.
 type SessionInfo struct {
