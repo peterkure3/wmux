@@ -46,6 +46,7 @@ func (s *Session) Info() proto.SessionInfo {
 	return proto.SessionInfo{
 		ID: s.ID, Cwd: s.Cwd, Branch: s.branch,
 		Ports: s.ports, LastNote: s.lastNote, Running: s.running,
+		PID: s.pid, Native: s.native,
 	}
 }
 

@@ -57,6 +57,10 @@ func main() {
 		cmdUpdate(os.Args[2:])
 	case "autostart":
 		cmdAutostart(os.Args[2:])
+	case "panes":
+		cmdPanes(os.Args[2:])
+	case "send-keys":
+		cmdSendKeys(os.Args[2:])
 	case "version":
 		cmdVersion(os.Args[2:])
 	default:
@@ -93,6 +97,8 @@ func usage() {
   wmux update [--repo PATH] [--no-pull]  rebuild from source and self-update wmux + wmuxd
   wmux autostart install|uninstall|status
                                           register/remove wmuxd as a Task Scheduler logon task
+  wmux panes                              list sessions with live console-window status (introspection wt.exe has no API for)
+  wmux send-keys --id ID -- KEYS...       inject keystrokes into a native session's console (e.g. Enter, "Ctrl c", literal text)
   wmux version                           print the wmux version`)
 }
 

@@ -21,6 +21,8 @@ type SessionInfo struct {
 	Ports    []int  `json:"ports"`
 	LastNote string `json:"lastNote"`
 	Running  bool   `json:"running"`
+	PID      int    `json:"pid"`
+	Native   bool   `json:"native"`
 }
 
 // NewSessionRequest is the body for POST /sessions.
