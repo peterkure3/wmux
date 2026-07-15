@@ -211,6 +211,31 @@ func (d *Daemon) Deregister(id string) error {
 	return nil
 }
 
+// Prune removes every exited session from daemon state — entries are
+// otherwise kept forever so `wmux list` can show last known state, which
+// accumulates test runs and one-offs until the sidebar/list is mostly
+// noise. Running sessions are never touched. Returns the removed IDs.
+func (d *Daemon) Prune() []string {
+	d.mu.Lock()
+	removed := []string{}
+	for id, sess := range d.sessions {
+		sess.mu.Lock()
+		running := sess.running
+		sess.mu.Unlock()
+		if !running {
+			delete(d.sessions, id)
+			removed = append(removed, id)
+		}
+	}
+	d.mu.Unlock()
+
+	if len(removed) > 0 {
+		d.save()
+		d.publishSessions()
+	}
+	return removed
+}
+
 // Close terminates a session's underlying process — the daemon-owned
 // process for a `wmux new` session, or the registered PID for a `wmux
 // attach`/`wmux pane` session. This is what `wmux close` calls: it ends

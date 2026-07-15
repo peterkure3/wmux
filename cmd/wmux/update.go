@@ -95,23 +95,28 @@ func cmdUpdate(args []string) {
 	wmuxDest := filepath.Join(deployDir, "wmux.exe")
 	wmuxdDest := filepath.Join(deployDir, "wmuxd.exe")
 
-	if err := swapBinary(filepath.Join(stagingDir, "wmuxd.exe"), wmuxdDest); err != nil {
-		restoreBinary(wmuxdDest)
+	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, "wmuxd.exe"), wmuxdDest)
+	if err != nil {
+		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
 		fatalUpdate("could not install wmuxd.exe: %v", err)
 	}
-	if err := swapBinary(filepath.Join(stagingDir, "wmux.exe"), wmuxDest); err != nil {
+	wmuxAside, err := swapBinary(filepath.Join(stagingDir, "wmux.exe"), wmuxDest)
+	if err != nil {
 		// Roll BOTH back — never leave a version-skewed wmux/wmuxd pair.
-		restoreBinary(wmuxDest)
-		restoreBinary(wmuxdDest)
+		restoreBinary(wmuxDest, wmuxAside)
+		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
 		fatalUpdate("could not install wmux.exe: %v", err)
 	}
 
-	// The old daemon has exited, so its .old usually deletes fine now.
-	// wmux.exe.old cannot go yet — this very process runs from it; the
-	// next update's cleanupOld collects it.
-	os.Remove(wmuxdDest + ".old")
+	// The old daemon has exited, so its aside copy usually deletes fine
+	// now. wmux.exe's aside cannot go yet — this very process (or a
+	// long-lived pane like the sidebar) may run from it; the next update's
+	// cleanupOld collects it.
+	if wmuxdAside != "" {
+		os.Remove(wmuxdAside)
+	}
 
 	if wasRunning {
 		if err := startDaemonDetached(wmuxdDest); err != nil {
@@ -279,37 +284,49 @@ func pollHealthz(timeout time.Duration, wantUp bool) bool {
 	return daemonRunning() == wantUp
 }
 
-// swapBinary replaces dest with newPath's content: rename dest aside to
-// dest.old (legal even while dest is a running .exe — same directory, so
-// same volume), then copy the new file in (copy, not rename: the staging
-// temp dir may be on a different volume than the deploy dir).
-func swapBinary(newPath, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		if err := os.Rename(dest, dest+".old"); err != nil {
-			return fmt.Errorf("could not move old binary aside: %w", err)
+// swapBinary replaces dest with newPath's content: rename dest aside
+// (legal even while dest is a running .exe — same directory, so same
+// volume), then copy the new file in (copy, not rename: the staging temp
+// dir may be on a different volume than the deploy dir). The aside name
+// is unique per run (dest.old.<unix-nanos>) rather than a fixed dest.old:
+// a long-lived process still executing a previous update's aside copy
+// (the sidebar pane, or this very update process) keeps that file locked,
+// and renaming onto a locked existing file fails with access denied —
+// which is exactly how a fixed name made the whole update abort once the
+// sidebar existed. Returns the aside path actually used ("" if dest
+// didn't exist), which restoreBinary needs to undo precisely this run's
+// move and nothing else.
+func swapBinary(newPath, dest string) (asidePath string, err error) {
+	if _, statErr := os.Stat(dest); statErr == nil {
+		asidePath = fmt.Sprintf("%s.old.%d", dest, time.Now().UnixNano())
+		if err := os.Rename(dest, asidePath); err != nil {
+			return "", fmt.Errorf("could not move old binary aside: %w", err)
 		}
 	}
-	err := copyFile(newPath, dest)
+	err = copyFile(newPath, dest)
 	if err != nil {
 		// Defender sometimes briefly holds freshly written exes; one short
 		// retry is cheap insurance.
 		time.Sleep(500 * time.Millisecond)
 		err = copyFile(newPath, dest)
 	}
-	return err
+	return asidePath, err
 }
 
-// restoreBinary undoes a swapBinary: drop any half-copied dest and put the
-// .old back. If even the restore rename fails there is no automated way
-// out — tell the user the exact manual fix.
-func restoreBinary(dest string) {
-	old := dest + ".old"
-	if _, err := os.Stat(old); err != nil {
-		return // nothing was moved aside; nothing to restore
+// restoreBinary undoes a swapBinary: drop any half-copied dest and put
+// this run's aside copy back. asidePath == "" means swapBinary never
+// moved anything aside — dest is whatever it was before, so touching it
+// would only destroy a good binary (removing dest unconditionally is
+// exactly what nearly deleted a healthy wmux.exe once). If even the
+// restore rename fails there is no automated way out — tell the user the
+// exact manual fix.
+func restoreBinary(dest, asidePath string) {
+	if asidePath == "" {
+		return // nothing was moved aside; dest was never touched
 	}
 	os.Remove(dest)
-	if err := os.Rename(old, dest); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux update: could not restore %s: %v\n  fix manually: rename %s back to %s\n", dest, err, old, dest)
+	if err := os.Rename(asidePath, dest); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux update: could not restore %s: %v\n  fix manually: rename %s back to %s\n", dest, err, asidePath, dest)
 	}
 }
 
@@ -322,9 +339,17 @@ func restartOldDaemonAfterFailure(wasRunning bool, wmuxdPath string) {
 	}
 }
 
+// cleanupOld collects aside copies left by previous updates — both the
+// current unique names (wmux.exe.old.<nanos>) and the legacy fixed .old
+// names. Best-effort: a long-lived process (sidebar pane, an old attach
+// session) may still hold one locked; it stays until a later update runs
+// after that process is gone.
 func cleanupOld(dir string) {
-	for _, name := range []string{"wmux.exe.old", "wmuxd.exe.old"} {
-		os.Remove(filepath.Join(dir, name))
+	for _, pattern := range []string{"wmux.exe.old*", "wmuxd.exe.old*"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
+		for _, m := range matches {
+			os.Remove(m)
+		}
 	}
 }
 

@@ -96,6 +96,12 @@ type ClaimPaneRequest struct {
 	ID string `json:"id"`
 }
 
+// PruneResult is the response for POST /sessions/prune — the IDs of the
+// exited sessions that were removed from daemon state.
+type PruneResult struct {
+	Removed []string `json:"removed"`
+}
+
 // DeregisterSessionRequest is the body for POST /sessions/deregister.
 type DeregisterSessionRequest struct {
 	ID string `json:"id"`

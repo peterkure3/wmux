@@ -20,6 +20,7 @@ func (d *Daemon) Serve(addr string) error {
 	mux.HandleFunc("/sessions/register", d.handleRegister)
 	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
 	mux.HandleFunc("/sessions/close", d.handleClose)
+	mux.HandleFunc("/sessions/prune", d.handlePrune)
 	mux.HandleFunc("/panes/pending", d.handlePanePending)
 	mux.HandleFunc("/panes/claim", d.handlePaneClaim)
 	mux.HandleFunc("/notify", d.handleNotify)
@@ -138,6 +139,16 @@ func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handlePrune removes all exited sessions from daemon state — called by
+// `wmux prune`.
+func (d *Daemon) handlePrune(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(proto.PruneResult{Removed: d.Prune()})
 }
 
 // handlePanePending files a pane spec from `wmux pane`, to be claimed by

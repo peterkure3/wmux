@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -55,6 +56,8 @@ func main() {
 		cmdClose(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
+	case "prune":
+		cmdPrune(os.Args[2:])
 	case "watch":
 		cmdWatch(os.Args[2:])
 	case "update":
@@ -100,6 +103,7 @@ func usage() {
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
   wmux list                              list sessions and their state
+  wmux prune                             remove all exited sessions from daemon state
   wmux watch                             stream notifications as they arrive
   wmux update [--repo PATH] [--no-pull]  rebuild from source and self-update wmux + wmuxd
   wmux autostart install|uninstall|status
@@ -856,6 +860,34 @@ func cmdList(args []string) {
 		fmt.Printf("%-20s %-10s %-20s branch=%-15s ports=%v note=%q\n",
 			s.ID, status, s.Cwd, s.Branch, s.Ports, s.LastNote)
 	}
+}
+
+// cmdPrune clears exited sessions out of daemon state. Entries are kept
+// after exit on purpose (`wmux list` shows last known state), but they
+// accumulate forever otherwise — this is the manual cleanup.
+func cmdPrune(args []string) {
+	resp, err := http.Post(daemonAddr+"/sessions/prune", "application/json", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmux prune: could not reach wmuxd: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "wmux prune: daemon returned %s: %s\n", resp.Status, string(body))
+		os.Exit(1)
+	}
+	var result proto.PruneResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux prune: could not parse daemon response: %v\n", err)
+		os.Exit(1)
+	}
+	if len(result.Removed) == 0 {
+		fmt.Println("nothing to prune (no exited sessions)")
+		return
+	}
+	sort.Strings(result.Removed)
+	fmt.Printf("pruned %d exited session(s): %s\n", len(result.Removed), strings.Join(result.Removed, ", "))
 }
 
 // cmdWatch tails /events and prints notifications as they arrive — a
