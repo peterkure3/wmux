@@ -199,6 +199,20 @@ before any `[tables]`):
 notify = ["wmux", "hook-codex", "--session", "my-project"]
 ```
 
+**Codex desktop app gotcha:** the app claims `notify` for its own handler
+(`codex-computer-use.exe turn-ended`), and Codex allows only one `notify`
+command — don't displace it. Chain it with `--forward` (one occurrence
+per argv token; the JSON payload is appended to the forwarded command):
+```toml
+notify = [ "C:\\wmux\\wmux.exe", "hook-codex", "--session", "codex",
+           "--forward", "C:\\...\\codex-computer-use.exe", "--forward", "turn-ended" ]
+```
+The forward runs first, for every event type, even with wmuxd down; its
+exit code is propagated, and the wmux notify is best-effort. Also note:
+the desktop app's handler path contains a versioned hash directory and
+the app may rewrite config.toml on update — re-check the `notify` line
+after app updates.
+
 ## How `wmux pane` works — the profile flow
 
 `wmux pane` does not pass a commandline through `wt.exe`. It (1)

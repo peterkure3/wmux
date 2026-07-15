@@ -212,6 +212,22 @@ per-tool events), and `--session` is a fixed label you choose per
 `config.toml` rather than something Codex hands you — it falls back to the
 current working directory if omitted.
 
+**If `notify` is already taken** — the Codex desktop app claims it for its
+own handler (`codex-computer-use.exe turn-ended`), and Codex allows only
+one `notify` command. Chain the existing handler through `--forward`
+instead of displacing it (one `--forward` per argv token; the JSON payload
+is appended to the forwarded invocation exactly as Codex would have done):
+
+```toml
+notify = [ "C:\\wmux\\wmux.exe", "hook-codex", "--session", "codex",
+           "--forward", "C:\\...\\codex-computer-use.exe", "--forward", "turn-ended" ]
+```
+
+The forward runs first and unconditionally — every event type, even when
+`wmuxd` is unreachable — and its exit code is what Codex sees; the wmux
+notify itself is best-effort in this mode, so a wmux problem can never
+break the app's own notification chain.
+
 ### Important: where the daemon needs to run
 
 Whichever of `wmux hook-claude` / `wmux hook-codex` actually gets invoked
