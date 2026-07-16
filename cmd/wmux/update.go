@@ -43,6 +43,7 @@ func cmdUpdate(args []string) {
 	fs := newFlagSet("update")
 	repoFlag := fs.String("repo", "", "path to the wmux source repo (falls back to WMUX_REPO, then the path stamped into this binary)")
 	noPull := fs.Bool("no-pull", false, "build the repo as-is without git pull")
+	killSurfaces := fs.Bool("kill-surfaces", false, "proceed even if live surfaces exist — the wmuxd restart kills them")
 	fs.Parse(args)
 
 	if runtime.GOOS != "windows" {
@@ -81,9 +82,37 @@ func cmdUpdate(args []string) {
 
 	wasRunning := daemonRunning()
 	if wasRunning {
-		if sessions := listRunningSessions(); len(sessions) > 0 {
-			fmt.Fprintf(os.Stderr, "warning: %d session(s) keep running the old binary until reopened:\n", len(sessions))
-			for _, s := range sessions {
+		sessions := listRunningSessions()
+		var surfaces, others []proto.SessionInfo
+		for _, s := range sessions {
+			if s.Surface {
+				surfaces = append(surfaces, s)
+			} else {
+				others = append(others, s)
+			}
+		}
+
+		// A pane/attach session survives the update untouched (it runs its
+		// own process; only its metadata tracking blips) — a surface does
+		// not: its ConPTY and screen state live inside the wmuxd process
+		// this update is about to restart. Refuse rather than silently
+		// killing agent sessions mid-turn.
+		if len(surfaces) > 0 && !*killSurfaces {
+			fmt.Fprintf(os.Stderr, "wmux update: %d live surface(s) would be killed by the wmuxd restart (a surface's ConPTY dies with its daemon):\n", len(surfaces))
+			for _, s := range surfaces {
+				fmt.Fprintf(os.Stderr, "  %s (cwd=%s)\n", s.ID, s.Cwd)
+			}
+			fatalUpdate("finish them first ('exit' inside, or wmux close --id ID), or rerun with --kill-surfaces — nothing was changed")
+		}
+		if len(surfaces) > 0 {
+			fmt.Fprintf(os.Stderr, "warning: killing %d live surface(s) (--kill-surfaces):\n", len(surfaces))
+			for _, s := range surfaces {
+				fmt.Fprintf(os.Stderr, "  %s (cwd=%s)\n", s.ID, s.Cwd)
+			}
+		}
+		if len(others) > 0 {
+			fmt.Fprintf(os.Stderr, "warning: %d session(s) keep running the old binary until reopened:\n", len(others))
+			for _, s := range others {
 				fmt.Fprintf(os.Stderr, "  %s (cwd=%s)\n", s.ID, s.Cwd)
 			}
 		}

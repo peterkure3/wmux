@@ -123,7 +123,9 @@ func usage() {
   wmux list                              list sessions and their state
   wmux prune                             remove all exited sessions from daemon state
   wmux watch                             stream notifications as they arrive
-  wmux update [--repo PATH] [--no-pull]  rebuild from source and self-update wmux + wmuxd
+  wmux update [--repo PATH] [--no-pull] [--kill-surfaces]
+                                          rebuild from source and self-update wmux + wmuxd
+                                          (refuses while live surfaces exist unless --kill-surfaces)
   wmux autostart install|uninstall|status
                                           register/remove wmuxd as a Task Scheduler logon task
   wmux panes                              list sessions with live console-window status (introspection wt.exe has no API for)
