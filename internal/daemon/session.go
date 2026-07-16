@@ -31,6 +31,8 @@ type Session struct {
 
 	mu         sync.Mutex
 	cmd        *exec.Cmd
+	sfc        *Surface // non-nil for surface sessions (daemon-owned ConPTY; see surface.go)
+	wasSurface bool     // restored surface whose ConPTY died with the previous daemon run
 	pid        int
 	native     bool
 	branch     string
@@ -46,7 +48,7 @@ func (s *Session) Info() proto.SessionInfo {
 	return proto.SessionInfo{
 		ID: s.ID, Cwd: s.Cwd, Branch: s.branch,
 		Ports: s.ports, LastNote: s.lastNote, Running: s.running,
-		PID: s.pid, Native: s.native,
+		PID: s.pid, Native: s.native, Surface: s.sfc != nil || s.wasSurface,
 	}
 }
 
@@ -390,7 +392,9 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		running := sess.running
 		pid := sess.pid
 		native := sess.native
-		daemonOwned := sess.cmd != nil
+		// Surface sessions are daemon-owned too: reapSurface's cmd.Wait()
+		// reaps them, so the WSL liveness probe below must not apply.
+		daemonOwned := sess.cmd != nil || sess.sfc != nil
 		sess.mu.Unlock()
 		if !running {
 			return

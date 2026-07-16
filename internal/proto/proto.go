@@ -44,6 +44,7 @@ type SessionInfo struct {
 	Running  bool   `json:"running"`
 	PID      int    `json:"pid"`
 	Native   bool   `json:"native"`
+	Surface  bool   `json:"surface,omitempty"` // daemon-owned ConPTY session; attachable via wmux connect
 }
 
 // NewSessionRequest is the body for POST /sessions.
@@ -112,4 +113,58 @@ type DeregisterSessionRequest struct {
 // registered PID for `wmux attach`).
 type CloseSessionRequest struct {
 	ID string `json:"id"`
+}
+
+// NewSurfaceRequest is the body for POST /surfaces — creates a
+// daemon-owned ConPTY session (a "surface"): the daemon holds the
+// pseudo-terminal and a server-side VT screen model, so the session has a
+// real TTY (unlike `wmux new`'s pipe) but survives its client terminal
+// closing (unlike `wmux attach`). Clients view/control it via
+// GET /surfaces/attach.
+type NewSurfaceRequest struct {
+	ID      string `json:"id"`
+	Cwd     string `json:"cwd"`
+	Command string `json:"command"`
+	Distro  string `json:"distro,omitempty"` // WSL distro; ignored with Native
+	Native  bool   `json:"native,omitempty"` // run directly on the daemon's OS, no WSL
+	Cols    int    `json:"cols,omitempty"`   // initial size; defaults to 120x30
+	Rows    int    `json:"rows,omitempty"`
+}
+
+// SurfaceFrame is one JSON line in the GET /surfaces/attach stream.
+//
+//	{"type":"replay","cols":120,"rows":30,"data":"<b64 ANSI repaint>"}   full current screen; sent first and after every resize
+//	{"type":"output","data":"<b64 raw pty bytes>"}                       ordered live output
+//	{"type":"exit"}                                                      the surface's process ended
+//
+// A client renders a replay by writing its bytes verbatim (it begins with
+// a clear-screen), then applies output frames as they arrive.
+type SurfaceFrame struct {
+	Type string `json:"type"`
+	Cols int    `json:"cols,omitempty"`
+	Rows int    `json:"rows,omitempty"`
+	Data []byte `json:"data,omitempty"` // JSON-encodes as base64
+}
+
+// Frame types for SurfaceFrame.Type.
+const (
+	FrameReplay = "replay"
+	FrameOutput = "output"
+	FrameExit   = "exit"
+)
+
+// SurfaceInputRequest is the body for POST /surfaces/input — raw bytes
+// (keystrokes) written to the surface's PTY.
+type SurfaceInputRequest struct {
+	ID   string `json:"id"`
+	Data []byte `json:"data"`
+}
+
+// SurfaceResizeRequest is the body for POST /surfaces/resize. The daemon
+// resizes the PTY and its VT screen model, then pushes a fresh replay to
+// every attached client.
+type SurfaceResizeRequest struct {
+	ID   string `json:"id"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }

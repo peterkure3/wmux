@@ -20,6 +20,7 @@ type persistedSession struct {
 	Ports    []int  `json:"ports"`
 	LastNote string `json:"lastNote"`
 	Running  bool   `json:"running"`
+	Surface  bool   `json:"surface,omitempty"`
 }
 
 // DefaultStatePath is where the daemon persists session state between
@@ -51,7 +52,7 @@ func (d *Daemon) save() {
 		snap = append(snap, persistedSession{
 			ID: s.ID, Cwd: s.Cwd, Distro: s.Distro, Command: s.Command,
 			PID: s.pid, Native: s.native, Branch: s.branch, Ports: s.ports,
-			LastNote: s.lastNote, Running: s.running,
+			LastNote: s.lastNote, Running: s.running, Surface: s.sfc != nil,
 		})
 		s.mu.Unlock()
 	}
@@ -116,6 +117,12 @@ func (d *Daemon) load() {
 	d.mu.Lock()
 	for _, p := range snap {
 		running := p.Running && p.PID != 0
+		// A surface's ConPTY and screen state died with the old daemon
+		// process — there is nothing to reattach to, so it always comes
+		// back exited (its child, if somehow alive, lost its console).
+		if p.Surface {
+			running = false
+		}
 		// Only re-check liveness for PIDs in our own namespace — a
 		// WSL-registered session's PID means nothing to this side's
 		// process table, and a wrong verdict here either kills a live
@@ -127,7 +134,7 @@ func (d *Daemon) load() {
 		sess := &Session{
 			ID: p.ID, Cwd: p.Cwd, Distro: p.Distro, Command: p.Command,
 			pid: p.PID, native: p.Native, branch: p.Branch, ports: p.Ports,
-			lastNote: p.LastNote, running: running,
+			lastNote: p.LastNote, running: running, wasSurface: p.Surface,
 		}
 		d.sessions[p.ID] = sess
 		restored++

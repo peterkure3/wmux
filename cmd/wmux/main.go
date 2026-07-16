@@ -23,7 +23,15 @@ import (
 	"github.com/peterkure/wmux/internal/proto"
 )
 
-const daemonAddr = "http://127.0.0.1:47823"
+// daemonAddr is where the wmuxd HTTP API lives. WMUX_ADDR overrides the
+// default — for pointing at a wmuxd started with a non-default -addr
+// (parallel test daemon, several isolated daemons on one machine).
+var daemonAddr = func() string {
+	if addr := os.Getenv("WMUX_ADDR"); addr != "" {
+		return addr
+	}
+	return "http://127.0.0.1:47823"
+}()
 
 func main() {
 	if len(os.Args) < 2 {
@@ -42,6 +50,10 @@ func main() {
 		cmdNew(os.Args[2:])
 	case "attach":
 		cmdAttach(os.Args[2:])
+	case "surface":
+		cmdSurface(os.Args[2:])
+	case "connect":
+		cmdConnect(os.Args[2:])
 	case "pane":
 		cmdPane(os.Args[2:])
 	case "pane-exec":
@@ -93,6 +105,10 @@ func usage() {
                                           --forward TOKEN (repeatable) chains a pre-existing notify handler
   wmux new --id ID --cwd PATH --cmd CMD  spawn a new HEADLESS agent session (no TTY; daemon owns the pipe)
   wmux attach --id ID --cwd PATH -- CMD  run CMD interactively (real TTY), tracked by the daemon
+  wmux surface --id ID --cwd PATH --cmd CMD [--native] [--distro D]
+                                          spawn CMD in a daemon-owned ConPTY (real TTY, runs headless,
+                                          survives terminal close — tmux-style)
+  wmux connect --id ID                   attach this terminal to a surface (Ctrl-] detaches, session keeps running)
   wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split right|down|tab]
                                           open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]

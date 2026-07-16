@@ -21,6 +21,10 @@ func (d *Daemon) Serve(addr string) error {
 	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
 	mux.HandleFunc("/sessions/close", d.handleClose)
 	mux.HandleFunc("/sessions/prune", d.handlePrune)
+	mux.HandleFunc("/surfaces", d.handleSurfaces)
+	mux.HandleFunc("/surfaces/attach", d.handleSurfaceAttach)
+	mux.HandleFunc("/surfaces/input", d.handleSurfaceInput)
+	mux.HandleFunc("/surfaces/resize", d.handleSurfaceResize)
 	mux.HandleFunc("/panes/pending", d.handlePanePending)
 	mux.HandleFunc("/panes/claim", d.handlePaneClaim)
 	mux.HandleFunc("/notify", d.handleNotify)
@@ -253,4 +257,106 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// handleSurfaces creates a surface session — a daemon-owned ConPTY the
+// agent runs inside, attachable/detachable like a tmux session. Called by
+// `wmux surface`.
+func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.NewSurfaceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sess, err := d.SpawnSurface(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	json.NewEncoder(w).Encode(sess.Info())
+}
+
+// handleSurfaceAttach streams a surface's screen to a client as JSON
+// lines: one replay frame (full current screen) up front, then ordered
+// output frames, with a fresh replay after any resize and an exit frame
+// when the process ends. Called by `wmux connect`.
+func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	id := r.URL.Query().Get("id")
+
+	ch, err := d.AttachSurface(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer d.DetachSurface(id, ch)
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	enc := json.NewEncoder(w)
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame := <-ch:
+			if err := enc.Encode(frame); err != nil {
+				return
+			}
+			flusher.Flush()
+			if frame.Type == proto.FrameExit {
+				return
+			}
+		}
+	}
+}
+
+// handleSurfaceInput writes client keystrokes to a surface's pty.
+func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.SurfaceInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.InputSurface(req.ID, req.Data); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSurfaceResize resizes a surface's pty + screen model; every
+// attached client then receives a fresh replay at the new size.
+func (d *Daemon) handleSurfaceResize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req proto.SurfaceResizeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.ResizeSurface(req.ID, req.Cols, req.Rows); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }

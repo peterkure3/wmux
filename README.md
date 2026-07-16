@@ -87,6 +87,30 @@ wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe
 `--split` accepts `tab` (default, new tab), `right` (side-by-side split),
 or `down` (stacked split).
 
+### Detachable sessions (`wmux surface` + `wmux connect`)
+
+tmux-style sessions: the daemon owns a real pseudo-terminal (ConPTY) the
+agent runs inside, plus a server-side VT screen model, so the session is
+fully interactive **and** survives its viewing terminal closing. Close
+Windows Terminal entirely — the agent keeps running; reconnect later and
+the current screen repaints exactly (a VT replay, not scrollback).
+
+```
+wmux surface --id my-project --cwd /home/you/my-project --cmd claude   # spawn, headless
+wmux connect --id my-project                                           # view/control it here
+```
+
+`Ctrl-]` detaches (the session keeps running); reconnect any time, from
+any terminal, with the same `wmux connect`. Several clients can attach at
+once. Pass `--native` to `wmux surface` to run the command directly on
+Windows, same rule as `wmux pane --native`. Surfaces show up in
+`wmux list`/the sidebar like any session, and their output is watched for
+OSC notify sequences like `wmux new` sessions.
+
+Caveats: a surface dies with the daemon (the ConPTY can't survive a wmuxd
+restart — it comes back as `exited`), and `wmux update` restarts wmuxd,
+so finish or close surfaces before updating.
+
 Under the hood, `wmux pane` files a "pane spec" with the daemon and opens
 the pane on a dedicated `wmux` Windows Terminal profile (installed
 automatically as a [settings fragment](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions),
