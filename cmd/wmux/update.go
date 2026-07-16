@@ -82,7 +82,12 @@ func cmdUpdate(args []string) {
 
 	wasRunning := daemonRunning()
 	if wasRunning {
-		sessions := listRunningSessions()
+		sessions, err := listRunningSessions()
+		if err != nil {
+			// Fail closed: without the list there is no way to know whether
+			// live surfaces exist, and proceeding would kill them silently.
+			fatalUpdate("%v — refusing to update without knowing whether live surfaces exist (retry, or stop wmuxd yourself first) — nothing was changed", err)
+		}
 		var surfaces, others []proto.SessionInfo
 		for _, s := range sessions {
 			if s.Surface {
@@ -260,21 +265,31 @@ func daemonRunning() bool {
 	return true
 }
 
-func listRunningSessions() []proto.SessionInfo {
+// listRunningSessions returns the daemon's running sessions, or an error
+// if the list could not actually be fetched. The distinction matters: the
+// surface guard in cmdUpdate must not treat "couldn't ask" as "no
+// surfaces" — that would fail open and kill live surfaces on a transient
+// error.
+func listRunningSessions() ([]proto.SessionInfo, error) {
 	resp, err := http.Get(daemonAddr + "/sessions")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("could not list sessions: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("could not list sessions: daemon returned %s", resp.Status)
+	}
 	var sessions []proto.SessionInfo
-	json.NewDecoder(resp.Body).Decode(&sessions)
+	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+		return nil, fmt.Errorf("could not parse session list: %w", err)
+	}
 	running := sessions[:0]
 	for _, s := range sessions {
 		if s.Running {
 			running = append(running, s)
 		}
 	}
-	return running
+	return running, nil
 }
 
 // stopDaemon asks wmuxd to exit (releasing its .exe file lock) and waits
