@@ -87,6 +87,22 @@ wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe
 `--split` accepts `tab` (default, new tab), `right` (side-by-side split),
 or `down` (stacked split).
 
+### Whole workspaces at once (`wmux grid`)
+
+`wmux grid` opens 2-4 panes in a single new tab with one command — each
+pane its own session, all running the same command in the same cwd (N
+shells or N agents on one repo):
+
+```powershell
+wmux.exe grid --native --ids api,web,worker,scratch --cwd D:\dev\proj --cmd cmd.exe
+```
+
+Layouts are equal splits: 2 ids side-by-side, 3 ids one full-height left
+plus two stacked right, 4 ids a 2x2 grid (order: top-left, top-right,
+bottom-right, bottom-left). Under the hood it is `wmux pane` N times in
+one chained `wt.exe` invocation, so the tab appears fully laid out at
+once and every pane self-closes when its session ends.
+
 ### Detachable sessions (`wmux surface` + `wmux connect`)
 
 tmux-style sessions: the daemon owns a real pseudo-terminal (ConPTY) the
