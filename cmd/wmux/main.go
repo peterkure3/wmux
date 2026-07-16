@@ -56,6 +56,8 @@ func main() {
 		cmdConnect(os.Args[2:])
 	case "pane":
 		cmdPane(os.Args[2:])
+	case "grid":
+		cmdGrid(os.Args[2:])
 	case "pane-exec":
 		cmdPaneExec(os.Args[2:])
 	case "sidebar":
@@ -113,6 +115,9 @@ func usage() {
                                           open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
                                           same, but runs CMD directly on Windows, no WSL
+  wmux grid --ids A,B[,C[,D]] --cwd PATH --cmd CMD [--native] [--distro D]
+                                          open 2-4 panes at once in one new tab (equal splits),
+                                          each running CMD as its own session
   wmux sidebar [--bare]                  open the live session sidebar (~20% wide) plus a default shell pane;
                                           --bare opens only the sidebar
   wmux sidebar --with CMD --cwd PATH [--id ID] [--native] [--distro D]
