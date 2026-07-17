@@ -35,6 +35,7 @@ func cmdSurface(args []string) {
 	distro := fs.String("distro", "", "WSL distro name (ignored with --native)")
 	native := fs.Bool("native", false, "run --cmd directly on the daemon's OS, no WSL")
 	fs.Parse(args)
+	*command = resolveCmd(*command)
 
 	if *id == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux surface: --id and --cmd are required")

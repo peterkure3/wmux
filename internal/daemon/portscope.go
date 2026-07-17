@@ -30,7 +30,7 @@ func processAliveWSL(distro string, pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	args := append(wslArgs(distro), "--", "kill", "-0", strconv.Itoa(pid))
+	args := append(wslArgs(distro), "--exec", "kill", "-0", strconv.Itoa(pid))
 	return hiddenCommand("wsl.exe", args...).Run() == nil
 }
 

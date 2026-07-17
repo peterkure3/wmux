@@ -135,7 +135,10 @@ func usage() {
                                           register/remove wmuxd as a Task Scheduler logon task
   wmux panes                              list sessions with live console-window status (introspection wt.exe has no API for)
   wmux send-keys --id ID -- KEYS...       inject keystrokes into a native session's console (e.g. Enter, "Ctrl c", literal text)
-  wmux version                           print the wmux version`)
+  wmux version                           print the wmux version
+
+  --cmd - (also --with -) reads the command from stdin instead — use for
+  commands with $(), quotes, or semicolons that shells/wsl.exe would mangle`)
 }
 
 // cmdNotify is a manual/testing entry point — for real agent integrations,
@@ -220,6 +223,28 @@ func cmdHookClaude(args []string) {
 	}
 
 	pushNotify(sessionID, payload.Message, "hook-claude")
+}
+
+// resolveCmd expands a --cmd value of "-" by reading the command from
+// stdin. Between the caller's shell and the daemon a command can cross
+// Git Bash, PowerShell, wsl.exe, and JSON — each mangles quoting and
+// metacharacters ($(), quotes, semicolons) differently; stdin passes the
+// bytes through untouched.
+func resolveCmd(cmd string) string {
+	if cmd != "-" {
+		return cmd
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmux: could not read --cmd from stdin: %v\n", err)
+		os.Exit(1)
+	}
+	c := strings.TrimSpace(string(b))
+	if c == "" {
+		fmt.Fprintln(os.Stderr, "wmux: --cmd - given but stdin was empty")
+		os.Exit(1)
+	}
+	return c
 }
 
 // multiFlag collects a repeatable string flag's values in order.
@@ -426,6 +451,7 @@ func cmdPane(args []string) {
 	split := fs.String("split", "tab", "'tab' (new tab), 'right' (side-by-side), or 'down' (stacked)")
 	native := fs.Bool("native", false, "run --cmd directly on Windows, no WSL — use when the agent is a native Windows install")
 	fs.Parse(args)
+	*command = resolveCmd(*command)
 
 	if *id == "" || *cwd == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux pane: --id, --cwd, and --cmd are required")
@@ -849,6 +875,7 @@ func cmdNew(args []string) {
 	command := fs.String("cmd", "", "command to run, e.g. 'claude'")
 	distro := fs.String("distro", "", "WSL distro name (Windows only; ignored elsewhere)")
 	fs.Parse(args)
+	*command = resolveCmd(*command)
 
 	if *id == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux new: --id and --cmd are required")
@@ -993,7 +1020,11 @@ func cmdWatch(args []string) {
 			if err := json.Unmarshal([]byte(line[6:]), &evt); err == nil &&
 				evt.Type == proto.EventNotify && evt.Notify != nil {
 				n := evt.Notify
-				fmt.Printf("[%s] %s: %s\n", n.Time.Format("15:04:05"), n.SessionID, n.Display())
+				missed := ""
+				if n.Dropped > 0 {
+					missed = fmt.Sprintf("  (+%d earlier missed)", n.Dropped)
+				}
+				fmt.Printf("[%s] %s: %s%s\n", n.Time.Format("15:04:05"), n.SessionID, n.Display(), missed)
 			}
 			// "sessions" lifecycle events are for UI clients (wmux sidebar);
 			// watch stays a notification tail.

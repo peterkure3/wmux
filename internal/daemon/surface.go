@@ -122,7 +122,9 @@ func buildSurfaceCommand(p pty.Pty, req proto.NewSurfaceRequest) *pty.Cmd {
 			c.Dir = req.Cwd
 			return c
 		}
-		args := append(wslArgs(req.Distro), "--cd", req.Cwd, "--", "bash", "-lc", req.Command)
+		// --exec for the same reason as buildCommand: the plain -- form
+		// double-expands the command through the distro's default shell.
+		args := append(wslArgs(req.Distro), "--cd", req.Cwd, "--exec", "bash", "-lc", req.Command)
 		return p.Command(resolveExe("wsl.exe"), args...)
 	}
 	c := p.Command(resolveExe("bash"), "-lc", req.Command)

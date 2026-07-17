@@ -14,6 +14,10 @@ type NotifyEvent struct {
 	Body      string    `json:"body"`
 	Kind      string    `json:"kind,omitempty"` // e.g. "agent_done", "agent_input", "error"
 	Time      time.Time `json:"time"`
+	// Dropped counts notifications this subscriber lost since its previous
+	// delivered notify (slow consumer: the daemon evicts the oldest queued
+	// event rather than blocking the session reader). 0 = none missed.
+	Dropped int `json:"dropped,omitempty"`
 }
 
 // Display renders the event as a one-line human-readable note.

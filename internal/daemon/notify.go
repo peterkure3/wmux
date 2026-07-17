@@ -44,6 +44,21 @@ func parseNote(code, body string) (title, message, kind string) {
 	}
 }
 
+// clipNote caps a stored lastNote so SessionInfo stays small on the wire —
+// it is embedded in every GET /sessions response and every sessions push.
+// The full body still reaches /events subscribers on the notify event itself.
+func clipNote(s string) string {
+	const maxRunes = 200
+	if len(s) <= maxRunes { // fast path: byte len ≤ max ⇒ rune count ≤ max
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
+}
+
 // scanNotes extracts every complete OSC notify sequence from pending,
 // publishing each as a structured event against sess, and returns the
 // unconsumed remainder for the caller to keep buffering.
@@ -61,7 +76,7 @@ func (d *Daemon) scanNotes(sess *Session, pending []byte) []byte {
 		}
 
 		sess.mu.Lock()
-		sess.lastNote = evt.Display()
+		sess.lastNote = clipNote(evt.Display())
 		sess.mu.Unlock()
 
 		d.publishNotify(evt)

@@ -31,6 +31,7 @@ func cmdGrid(args []string) {
 	distro := fs.String("distro", "", "WSL distro name (ignored with --native)")
 	native := fs.Bool("native", false, "run --cmd directly on Windows, no WSL")
 	fs.Parse(args)
+	*command = resolveCmd(*command)
 
 	if *ids == "" || *cwd == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux grid: --ids, --cwd, and --cmd are required")

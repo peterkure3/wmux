@@ -53,7 +53,10 @@ type Daemon struct {
 	sessions map[string]*Session
 
 	subMu sync.Mutex
-	subs  map[chan proto.Event]struct{}
+	// subs maps each subscriber channel to its dropped-notify counter —
+	// how many notifications were evicted/lost for that subscriber since
+	// the last notify it actually received (see publish).
+	subs map[chan proto.Event]*int
 
 	// panes holds pending pane specs (see panes.go) — the handshake between
 	// `wmux pane` and the `wmux pane-exec` process inside the new wt.exe pane.
@@ -69,7 +72,7 @@ type Daemon struct {
 func New(statePath string) *Daemon {
 	d := &Daemon{
 		sessions:  make(map[string]*Session),
-		subs:      make(map[chan proto.Event]struct{}),
+		subs:      make(map[chan proto.Event]*int),
 		statePath: statePath,
 	}
 	d.load()
@@ -77,9 +80,9 @@ func New(statePath string) *Daemon {
 }
 
 func (d *Daemon) Subscribe() chan proto.Event {
-	ch := make(chan proto.Event, 32)
+	ch := make(chan proto.Event, 256)
 	d.subMu.Lock()
-	d.subs[ch] = struct{}{}
+	d.subs[ch] = new(int)
 	d.subMu.Unlock()
 	return ch
 }
@@ -91,13 +94,59 @@ func (d *Daemon) Unsubscribe(ch chan proto.Event) {
 	close(ch)
 }
 
+// stampDropped attaches a subscriber's missed-notify count to an outgoing
+// notify event. The event is copied so one subscriber's count never leaks
+// into another subscriber's copy.
+func stampDropped(evt proto.Event, dropped int) proto.Event {
+	if dropped == 0 || evt.Type != proto.EventNotify || evt.Notify == nil {
+		return evt
+	}
+	n := *evt.Notify
+	n.Dropped = dropped
+	evt.Notify = &n
+	return evt
+}
+
+// publish fans an event out to every subscriber without ever blocking the
+// session reader. A subscriber whose buffer is full loses its OLDEST
+// queued event (a notification consumer wants recency), and the loss is
+// accounted for: the next notify it receives carries Dropped = how many
+// notifies were evicted since the last one it saw.
 func (d *Daemon) publish(evt proto.Event) {
+	isNotify := evt.Type == proto.EventNotify && evt.Notify != nil
 	d.subMu.Lock()
 	defer d.subMu.Unlock()
-	for ch := range d.subs {
+	for ch, dropped := range d.subs {
 		select {
-		case ch <- evt:
-		default: // slow subscriber; drop rather than block the watcher
+		case ch <- stampDropped(evt, *dropped):
+			if isNotify {
+				*dropped = 0
+			}
+			continue
+		default:
+		}
+
+		// Full: evict the oldest queued event to make room. An evicted
+		// notify — including any Dropped count it was itself carrying,
+		// which now never reaches the subscriber — adds to the counter.
+		select {
+		case old := <-ch:
+			if old.Type == proto.EventNotify && old.Notify != nil {
+				*dropped += 1 + old.Notify.Dropped
+			}
+		default:
+			// subscriber drained it between the two selects
+		}
+
+		select {
+		case ch <- stampDropped(evt, *dropped):
+			if isNotify {
+				*dropped = 0
+			}
+		default:
+			if isNotify {
+				*dropped++ // still full; this event is the one lost
+			}
 		}
 	}
 }
@@ -154,7 +203,12 @@ func wslArgs(distro string) []string {
 // daemon itself) it runs the command directly in a login shell.
 func buildCommand(cwd, distro, cmdline string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
-		args := append(wslArgs(distro), "--cd", cwd, "--", "bash", "-lc", cmdline)
+		// --exec, not --: without it wsl.exe routes the command tail through
+		// the distro's default shell, which expands $(), $vars, and quotes
+		// ONCE before bash -lc ever sees the script (verified empirically —
+		// `x=$(seq 1 3)` arrived as the multiline `x=1\n2\n3`). --exec
+		// passes argv straight to bash.
+		args := append(wslArgs(distro), "--cd", cwd, "--exec", "bash", "-lc", cmdline)
 		return hiddenCommand("wsl.exe", args...)
 	}
 	cmd := hiddenCommand("bash", "-lc", cmdline)
@@ -485,7 +539,7 @@ func gitBranch(cwd, distro string, native bool) string {
 	if runsDirectly(native) {
 		cmd = hiddenCommand("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	} else {
-		args := append(wslArgs(distro), "--", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		args := append(wslArgs(distro), "--exec", "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 		cmd = hiddenCommand("wsl.exe", args...)
 	}
 	out, err := cmd.Output()
@@ -519,7 +573,7 @@ func listeningPorts(distro string, pid int, native bool) []int {
 		return listeningPortsForTree(processTree(pid))
 	}
 
-	args := append(wslArgs(distro), "--", "ss", "-ltn")
+	args := append(wslArgs(distro), "--exec", "ss", "-ltn")
 	out, err := hiddenCommand("wsl.exe", args...).Output()
 	if err != nil {
 		return nil

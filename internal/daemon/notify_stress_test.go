@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/peterkure/wmux/internal/proto"
 )
 
 // TestMain silences the daemon's per-notify log lines — the burst tests
@@ -82,22 +84,26 @@ func TestScanNotesByteAtATime(t *testing.T) {
 	}
 }
 
-// TestScanNotesBurst pushes 5000 sequences in random-sized chunks.
-// Publish intentionally DROPS events for subscribers whose 32-slot buffer
-// is full, so the assertion is: every event that does arrive is intact
-// and strictly in order, and lastNote reflects the final sequence.
+// TestScanNotesBurst pushes 5000 sequences in random-sized chunks. A slow
+// subscriber loses its OLDEST queued events (drop-oldest, see publish),
+// with the loss reported on the next delivered notify's Dropped field —
+// so delivered events must be intact, strictly ordered, end with the
+// final sequence, and delivered + reported-dropped must account for every
+// single notify.
 func TestScanNotesBurst(t *testing.T) {
 	const n = 5000
 	f, _ := newFeed(t)
 	sub := f.d.Subscribe()
 
 	var got []string
+	var droppedSum int
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for evt := range sub {
 			if evt.Type == "notify" && evt.Notify != nil {
 				got = append(got, evt.Notify.Body)
+				droppedSum += evt.Notify.Dropped
 			}
 		}
 	}()
@@ -132,10 +138,71 @@ func TestScanNotesBurst(t *testing.T) {
 		}
 		prev = v
 	}
+	if prev != n-1 {
+		t.Fatalf("last delivered body %d, want %d — drop-oldest must never lose the newest", prev, n-1)
+	}
+	if len(got)+droppedSum != n {
+		t.Fatalf("accounting broken: %d delivered + %d reported dropped != %d published", len(got), droppedSum, n)
+	}
 	if f.lastNote() != fmt.Sprintf("B: %d", n-1) {
 		t.Fatalf("lastNote=%q, want last of burst", f.lastNote())
 	}
-	t.Logf("delivered %d/%d (drop-on-slow-subscriber is by design)", len(got), n)
+	t.Logf("delivered %d/%d, %d reported dropped", len(got), n, droppedSum)
+}
+
+// TestPublishDropOldest publishes past a subscriber's buffer capacity with
+// no concurrent reader — deterministic check of the eviction policy: the
+// channel must end up holding the NEWEST events, and Dropped fields must
+// account for every evicted notify.
+func TestPublishDropOldest(t *testing.T) {
+	d := New("")
+	sub := d.Subscribe()
+	cap := cap(sub)
+	n := cap + 44
+
+	for i := 0; i < n; i++ {
+		d.publishNotify(proto.NotifyEvent{SessionID: "s", Body: fmt.Sprint(i)})
+	}
+	d.Unsubscribe(sub)
+
+	var bodies []int
+	droppedSum := 0
+	for evt := range sub {
+		if evt.Type == proto.EventNotify && evt.Notify != nil {
+			v, _ := strconv.Atoi(evt.Notify.Body)
+			bodies = append(bodies, v)
+			droppedSum += evt.Notify.Dropped
+		}
+	}
+
+	if len(bodies) != cap {
+		t.Fatalf("channel held %d events, want %d", len(bodies), cap)
+	}
+	if bodies[len(bodies)-1] != n-1 {
+		t.Fatalf("newest event is %d, want %d", bodies[len(bodies)-1], n-1)
+	}
+	if bodies[0] != n-cap {
+		t.Fatalf("oldest surviving event is %d, want %d (oldest must be evicted first)", bodies[0], n-cap)
+	}
+	if len(bodies)+droppedSum != n {
+		t.Fatalf("accounting broken: %d delivered + %d dropped != %d published", len(bodies), droppedSum, n)
+	}
+}
+
+// TestClipNote checks the lastNote cap: short notes untouched, long notes
+// clipped rune-safe with an ellipsis.
+func TestClipNote(t *testing.T) {
+	if got := clipNote("short"); got != "short" {
+		t.Fatalf("short note changed: %q", got)
+	}
+	long := strings.Repeat("🎉", 8000)
+	got := clipNote(long)
+	if r := []rune(got); len(r) != 201 || r[200] != '…' {
+		t.Fatalf("clip wrong: %d runes, tail %q", len(r), string(r[max(0, len(r)-3):]))
+	}
+	if !strings.HasPrefix(long, strings.TrimSuffix(got, "…")) {
+		t.Fatal("clipped note is not a prefix of the original")
+	}
 }
 
 // TestScanNotesMalformed throws garbage at the scanner: unterminated

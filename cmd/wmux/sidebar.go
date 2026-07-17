@@ -39,6 +39,7 @@ func cmdSidebar(args []string) {
 	native := fs.Bool("native", false, "run --with directly on Windows, no WSL")
 	bare := fs.Bool("bare", false, "open only the sidebar, without a shell pane beside it")
 	fs.Parse(args)
+	*with = resolveCmd(*with)
 
 	if err := ensureWTProfileFragment(); err != nil {
 		fmt.Fprintf(os.Stderr, "wmux sidebar: could not install the 'wmux' Windows Terminal profile: %v\n", err)
