@@ -1,0 +1,50 @@
+name: release
+
+# Pushing a v* tag builds stamped wmux/wmuxd binaries for both deploy
+# targets (Windows-native and WSL/linux) and attaches them to a GitHub
+# release. CI proper lives in test.yml; this re-runs vet+race+test at the
+# tagged commit anyway since tags don't trigger the test workflow.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+      - name: build and package
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          # -X path follows go.mod's module name (peterkure, no 3) — see
+          # internal/version.
+          LD="-X github.com/peterkure/wmux/internal/version.Version=${VER}"
+          for os in windows linux; do
+            ext=""
+            [ "$os" = windows ] && ext=".exe"
+            mkdir -p "dist/$os-amd64"
+            GOOS=$os GOARCH=amd64 go build -trimpath -ldflags "$LD" -o "dist/$os-amd64/wmux$ext"  ./cmd/wmux
+            GOOS=$os GOARCH=amd64 go build -trimpath -ldflags "$LD" -o "dist/$os-amd64/wmuxd$ext" ./cmd/wmuxd
+          done
+          (cd dist/windows-amd64 && zip "../wmux_${VER}_windows-amd64.zip" wmux.exe wmuxd.exe)
+          tar -C dist/linux-amd64 -czf "dist/wmux_${VER}_linux-amd64.tar.gz" wmux wmuxd
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/wmux_${GITHUB_REF_NAME}_windows-amd64.zip" \
+            "dist/wmux_${GITHUB_REF_NAME}_linux-amd64.tar.gz" \
+            --title "$GITHUB_REF_NAME" --generate-notes

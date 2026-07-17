@@ -206,6 +206,12 @@ GOOS=windows GOARCH=amd64 go build -o bin/wmuxd.exe ./cmd/wmuxd
 GOOS=windows GOARCH=amd64 go build -o bin/wmux.exe  ./cmd/wmux
 ```
 
+CI (`.github/workflows/test.yml`) runs vet + build + tests on every push
+and PR — Linux with the race detector, plus a Windows runner. Pushing a
+`v*` tag triggers `.github/workflows/release.yml`, which re-runs the
+tests and attaches version-stamped `windows-amd64` (zip) and
+`linux-amd64` (tar.gz) builds of both binaries to a GitHub release.
+
 ## Wiring real agent hooks
 
 Agent hooks go through one generic handler, `wmux hook run <agent>`,
