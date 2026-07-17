@@ -664,8 +664,9 @@ func cmdPaneExec(args []string) {
 	} else {
 		// Runs inside the distro: exec wmux attach with a real TTY, tracked
 		// under the session ID, which then execs the actual agent command
-		// interactively. Base64-piped for the same reason as ever: no
-		// quoting survives more than one of these layers intact.
+		// interactively. --exec so the distro's default shell never
+		// re-expands the tail (see buildCommand), and base64-piped as
+		// defense in depth: the b64 charset survives any remaining layer.
 		innerCmd := fmt.Sprintf("wmux attach --id %s --cwd %s --distro %s -- %s",
 			shellQuote(spec.ID), shellQuote(spec.Cwd), shellQuote(spec.Distro), spec.Command)
 		encoded := base64.StdEncoding.EncodeToString([]byte(innerCmd))
@@ -674,7 +675,7 @@ func cmdPaneExec(args []string) {
 		if spec.Distro != "" {
 			wslArgs = append(wslArgs, "-d", spec.Distro)
 		}
-		wslArgs = append(wslArgs, "--cd", spec.Cwd, "--", "bash", "-lc",
+		wslArgs = append(wslArgs, "--cd", spec.Cwd, "--exec", "bash", "-lc",
 			fmt.Sprintf("echo %s|base64 -d|bash", encoded))
 		cmd = exec.Command("wsl.exe", wslArgs...)
 	}
