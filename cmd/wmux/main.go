@@ -128,6 +128,9 @@ func usage() {
                                           --bare opens only the sidebar
   wmux sidebar --with CMD --cwd PATH [--id ID] [--native] [--distro D]
                                           same, but the right pane runs an agent session instead of a shell
+  wmux sidebar --grid A,B[,C[,D]] --with CMD --cwd PATH [--native] [--distro D]
+                                          sidebar plus a 2-4 pane grid beside it in one tab,
+                                          every pane running CMD as its own session
   wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)

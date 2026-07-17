@@ -30,11 +30,14 @@ const sidebarTitle = "wmux-sidebar"
 // by opening the sidebar first and splitting agent panes right from it,
 // not by moving an existing pane. --with opens the first agent pane in the
 // same wt.exe invocation, sized so the sidebar keeps ~22% of the tab.
+// --grid lays out 2-4 agent panes (all running --with) in the region
+// right of the sidebar, same positions as `wmux grid`.
 func cmdSidebar(args []string) {
 	fs := newFlagSet("sidebar")
 	with := fs.String("with", "", "open a first agent pane running this command instead of the default shell pane")
 	cwd := fs.String("cwd", "", "working directory for --with")
 	id := fs.String("id", "", "session ID for --with (defaults to the cwd's base name)")
+	grid := fs.String("grid", "", "comma-separated session IDs (2-4): open a pane grid right of the sidebar, every pane running --with")
 	distro := fs.String("distro", "", "WSL distro for --with (implies a WSL pane)")
 	native := fs.Bool("native", false, "run --with directly on Windows, no WSL")
 	bare := fs.Bool("bare", false, "open only the sidebar, without a shell pane beside it")
@@ -48,6 +51,44 @@ func cmdSidebar(args []string) {
 
 	wtArgs := []string{"-w", "0", "new-tab",
 		"--title", sidebarTitle, "--suppressApplicationTitle", "--profile", "wmux"}
+
+	if *grid != "" {
+		if *with == "" || *cwd == "" {
+			fmt.Fprintln(os.Stderr, "wmux sidebar: --grid requires --with and --cwd")
+			os.Exit(1)
+		}
+		if *bare || *id != "" {
+			fmt.Fprintln(os.Stderr, "wmux sidebar: --grid cannot be combined with --bare or --id")
+			os.Exit(1)
+		}
+		if !*native && looksLikeWindowsCommand(*with) {
+			fmt.Fprintf(os.Stderr, "wmux sidebar: --with %q looks like a native Windows command — add --native\n", *with)
+			os.Exit(1)
+		}
+		idList := parseGridIDs("sidebar", *grid)
+		// File every spec before wt.exe launches so no pane-exec can beat
+		// its own spec to the daemon (same rule as `wmux grid`).
+		for _, paneID := range idList {
+			spec := proto.PaneSpec{ID: paneID, Cwd: *cwd, Distro: *distro, Command: *with, Native: *native}
+			if err := filePaneSpec(spec); err != nil {
+				fmt.Fprintf(os.Stderr, "wmux sidebar: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		// First grid pane takes the right 80% of the tab; the remaining
+		// splits subdivide that region exactly as `wmux grid` would a full
+		// tab, so pane positions match cmdGrid's documented layout.
+		wtArgs = append(wtArgs, ";", "split-pane", "-V", "-s", "0.80")
+		wtArgs = append(wtArgs, gridPaneArgs(idList[0])...)
+		wtArgs = append(wtArgs, gridSplitArgs(idList)...)
+
+		if err := exec.Command("wt.exe", wtArgs...).Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "wmux sidebar: could not launch wt.exe (is Windows Terminal installed and on PATH?): %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("opened sidebar with %d-pane grid for sessions %s\n", len(idList), strings.Join(idList, ", "))
+		return
+	}
 
 	if *with != "" {
 		if *cwd == "" {

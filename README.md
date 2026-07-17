@@ -397,7 +397,10 @@ daemon, it's only the hook direction that needs mirrored mode.
    branch/port changes, so the sidebar re-renders from SSE push instead
    of polling. `wmux sidebar --with CMD --cwd PATH [--native]` opens the
    sidebar plus a first agent pane (sidebar keeps ~22% width) in one
-   shot. A native-window UI can still slot in later against the same API.
+   shot, and `wmux sidebar --grid A,B[,C[,D]] --with CMD --cwd PATH`
+   opens the sidebar plus a 2-4 pane `wmux grid` layout beside it in the
+   same tab (every pane running CMD as its own session). A native-window
+   UI can still slot in later against the same API.
 6. ~~**Port scoping**~~ — done, and fixed a real latent bug found while
    implementing it: a **native** Windows session's git branch/port
    polling was always shelling into WSL regardless (the daemon only ever

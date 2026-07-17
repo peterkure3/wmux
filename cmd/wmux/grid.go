@@ -38,30 +38,7 @@ func cmdGrid(args []string) {
 		os.Exit(1)
 	}
 
-	var idList []string
-	for _, id := range strings.Split(*ids, ",") {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if id == sidebarTitle {
-			fmt.Fprintf(os.Stderr, "wmux grid: session ID %q is reserved for the sidebar itself\n", sidebarTitle)
-			os.Exit(1)
-		}
-		idList = append(idList, id)
-	}
-	if len(idList) < 2 || len(idList) > 4 {
-		fmt.Fprintf(os.Stderr, "wmux grid: need 2-4 pane IDs, got %d — for one pane use 'wmux pane'\n", len(idList))
-		os.Exit(1)
-	}
-	seen := map[string]bool{}
-	for _, id := range idList {
-		if seen[id] {
-			fmt.Fprintf(os.Stderr, "wmux grid: duplicate pane ID %q\n", id)
-			os.Exit(1)
-		}
-		seen[id] = true
-	}
+	idList := parseGridIDs("grid", *ids)
 
 	// Same up-front check as `wmux pane`: a Windows path handed to bash
 	// inside WSL fails as an unreadable pane flash.
@@ -93,42 +70,83 @@ func cmdGrid(args []string) {
 	fmt.Printf("opened %d-pane tab for sessions %s\n", len(idList), strings.Join(idList, ", "))
 }
 
-// gridWTArgs builds one chained wt.exe command line laying out 2-4 panes
-// with equal splits. Every split halves the focused pane, and wt moves
-// focus onto each new pane, so the sequences below land every ID in a
-// predictable position (see cmdGrid's doc comment). "-V" splits
-// side-by-side, "-H" stacked — wt names the flag after the divider's
-// orientation, not the layout (same trap as cmdPane's --split handling).
-func gridWTArgs(ids []string) []string {
-	paneArgs := func(id string) []string {
-		return []string{"--title", id, "--suppressApplicationTitle", "--profile", "wmux"}
+// parseGridIDs validates a comma-separated 2-4 pane ID list, shared by
+// `wmux grid` and `wmux sidebar --grid`. Exits with a diagnostic under
+// cmdName on any problem.
+func parseGridIDs(cmdName, raw string) []string {
+	var idList []string
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if id == sidebarTitle {
+			fmt.Fprintf(os.Stderr, "wmux %s: session ID %q is reserved for the sidebar itself\n", cmdName, sidebarTitle)
+			os.Exit(1)
+		}
+		idList = append(idList, id)
 	}
+	if len(idList) < 2 || len(idList) > 4 {
+		fmt.Fprintf(os.Stderr, "wmux %s: need 2-4 pane IDs, got %d — for one pane use 'wmux pane'\n", cmdName, len(idList))
+		os.Exit(1)
+	}
+	seen := map[string]bool{}
+	for _, id := range idList {
+		if seen[id] {
+			fmt.Fprintf(os.Stderr, "wmux %s: duplicate pane ID %q\n", cmdName, id)
+			os.Exit(1)
+		}
+		seen[id] = true
+	}
+	return idList
+}
 
+// gridPaneArgs are the per-pane wt.exe args of the wmux-profile pane flow.
+func gridPaneArgs(id string) []string {
+	return []string{"--title", id, "--suppressApplicationTitle", "--profile", "wmux"}
+}
+
+// gridWTArgs builds one chained wt.exe command line laying out 2-4 panes
+// with equal splits in a fresh tab.
+func gridWTArgs(ids []string) []string {
 	args := []string{"-w", "0", "new-tab"}
-	args = append(args, paneArgs(ids[0])...)
+	args = append(args, gridPaneArgs(ids[0])...)
+	args = append(args, gridSplitArgs(ids)...)
+	return args
+}
 
+// gridSplitArgs lays out ids[1:] around an already-placed, focused ids[0]
+// pane. Every split halves the focused pane, and wt moves focus onto each
+// new pane, so the sequences below land every ID in a predictable
+// position (see cmdGrid's doc comment). "-V" splits side-by-side, "-H"
+// stacked — wt names the flag after the divider's orientation, not the
+// layout (same trap as cmdPane's --split handling). Shared with
+// `wmux sidebar --grid`, which places ids[0] in the region right of the
+// sidebar before applying these same splits.
+func gridSplitArgs(ids []string) []string {
+	var args []string
 	switch len(ids) {
 	case 2:
 		// [0 | 1]
 		args = append(args, ";", "split-pane", "-V")
-		args = append(args, paneArgs(ids[1])...)
+		args = append(args, gridPaneArgs(ids[1])...)
 	case 3:
 		// [0 | 1]
 		// [0 | 2]
 		args = append(args, ";", "split-pane", "-V")
-		args = append(args, paneArgs(ids[1])...)
+		args = append(args, gridPaneArgs(ids[1])...)
 		args = append(args, ";", "split-pane", "-H")
-		args = append(args, paneArgs(ids[2])...)
+		args = append(args, gridPaneArgs(ids[2])...)
 	case 4:
 		// [0 | 1]
 		// [3 | 2]
 		args = append(args, ";", "split-pane", "-V")
-		args = append(args, paneArgs(ids[1])...)
+		args = append(args, gridPaneArgs(ids[1])...)
 		args = append(args, ";", "split-pane", "-H")
-		args = append(args, paneArgs(ids[2])...)
+		args = append(args, gridPaneArgs(ids[2])...)
 		args = append(args, ";", "move-focus", "left")
 		args = append(args, ";", "split-pane", "-H")
-		args = append(args, paneArgs(ids[3])...)
+		args = append(args, gridPaneArgs(ids[3])...)
 	}
 	return args
 }

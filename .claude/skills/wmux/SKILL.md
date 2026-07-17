@@ -238,6 +238,21 @@ ID as its fixed title (`--suppressApplicationTitle`) — that's also how
 `wmux focus --id` finds it. Consequence: `wmux pane` now requires the
 daemon reachable from the Windows side before it will open anything.
 
+## Whole workspace at once — `wmux grid`, `wmux sidebar --grid`
+
+```powershell
+wmux grid --native --ids a,b,c,d --cwd D:\proj --cmd C:\...\claude.exe
+wmux sidebar --grid a,b,c,d --native --cwd D:\proj --with C:\...\claude.exe
+```
+
+`grid` opens 2-4 equal-split panes in one new tab, each running `--cmd`
+as its own session (2: side by side; 3: full-height left + two stacked
+right; 4: 2x2 — first ID top-left, then clockwise). `sidebar --grid` is
+the same layout squeezed into the right ~80% of a tab whose leftmost pane
+is the live sidebar — sidebar plus whole workspace in one shot. Grid
+panes all share one cwd/cmd; for per-pane commands open individual
+`wmux pane` splits instead.
+
 ## Switching focus — `wmux focus`
 
 ```powershell
