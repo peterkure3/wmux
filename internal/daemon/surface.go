@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -173,22 +172,7 @@ func (d *Daemon) readSurface(sess *Session) {
 			// watchOutput (see its comment for why this is byte-, not
 			// line-, oriented).
 			pending = append(pending, chunk...)
-			for {
-				loc := oscNotifyRe.FindSubmatchIndex(pending)
-				if loc == nil {
-					break
-				}
-				body := string(pending[loc[2]:loc[3]])
-
-				sess.mu.Lock()
-				sess.lastNote = body
-				sess.mu.Unlock()
-
-				d.publishNotify(proto.NotifyEvent{SessionID: sess.ID, Body: body, Time: time.Now()})
-				log.Printf("[notify] session=%s body=%q", sess.ID, body)
-
-				pending = pending[loc[1]:]
-			}
+			pending = d.scanNotes(sess, pending)
 			if len(pending) > maxPending {
 				pending = pending[len(pending)-maxPending:]
 			}

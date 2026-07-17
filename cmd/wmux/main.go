@@ -993,7 +993,7 @@ func cmdWatch(args []string) {
 			if err := json.Unmarshal([]byte(line[6:]), &evt); err == nil &&
 				evt.Type == proto.EventNotify && evt.Notify != nil {
 				n := evt.Notify
-				fmt.Printf("[%s] %s: %s\n", n.Time.Format("15:04:05"), n.SessionID, n.Body)
+				fmt.Printf("[%s] %s: %s\n", n.Time.Format("15:04:05"), n.SessionID, n.Display())
 			}
 			// "sessions" lifecycle events are for UI clients (wmux sidebar);
 			// watch stays a notification tail.

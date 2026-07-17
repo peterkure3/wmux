@@ -268,6 +268,23 @@ The forward runs first and unconditionally — every event type, even when
 notify itself is best-effort in this mode, so a wmux problem can never
 break the app's own notification chain.
 
+### Notifying without a hook (raw OSC)
+
+Anything running inside a tracked session can notify by printing an OSC
+escape sequence — no hook wiring needed. Three forms are recognized:
+
+```
+printf '\033]9;build done\007'                                    # plain message
+printf '\033]99;title=Agent;message=needs input;type=agent_input\007'  # structured
+printf '\033]777;notify;Build;complete\007'                       # rxvt-style title;message
+```
+
+OSC 99 takes `key=value` pairs separated by `;` — `title`, `message`,
+and `type` (e.g. `agent_input`, `agent_done`, `error`); a body with no
+`=` is treated as a plain message. The parsed title/message/kind land as
+separate fields on the `/events` notify payload, and `wmux list`/the
+sidebar show them as `title: message`.
+
 ### Important: where the daemon needs to run
 
 Whichever of `wmux hook-claude` / `wmux hook-codex` actually gets invoked

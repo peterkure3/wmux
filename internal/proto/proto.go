@@ -5,11 +5,27 @@ package proto
 import "time"
 
 // NotifyEvent is raised whenever a session's output stream contains an
-// OSC 9 / OSC 99 / OSC 777 notification escape sequence.
+// OSC 9 / OSC 99 / OSC 777 notification escape sequence. Body is always
+// the human-readable message; Title and Kind are set when the sequence
+// carried structure (OSC 99 title=/type= keys, OSC 777's title field).
 type NotifyEvent struct {
 	SessionID string    `json:"sessionId"`
+	Title     string    `json:"title,omitempty"`
 	Body      string    `json:"body"`
+	Kind      string    `json:"kind,omitempty"` // e.g. "agent_done", "agent_input", "error"
 	Time      time.Time `json:"time"`
+}
+
+// Display renders the event as a one-line human-readable note.
+func (n NotifyEvent) Display() string {
+	switch {
+	case n.Title != "" && n.Body != "":
+		return n.Title + ": " + n.Body
+	case n.Title != "":
+		return n.Title
+	default:
+		return n.Body
+	}
 }
 
 // Event is the envelope streamed over GET /events. Exactly one payload

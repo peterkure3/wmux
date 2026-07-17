@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,11 +14,6 @@ import (
 
 	"github.com/peterkure/wmux/internal/proto"
 )
-
-// Matches OSC 9 (basic notify), OSC 99 (extended notify, iTerm2-style),
-// and OSC 777 (rxvt-style notify). All three are terminated by BEL (\x07)
-// or ST (\x1b\\).
-var oscNotifyRe = regexp.MustCompile(`\x1b\](?:9|99|777);([^\x07\x1b]*)(?:\x07|\x1b\\)`)
 
 // Session represents one running agent session (a shell running Claude
 // Code, Codex, etc.) that the daemon is watching.
@@ -349,24 +343,7 @@ func (d *Daemon) watchOutput(sess *Session, r io.Reader) {
 		n, err := r.Read(buf)
 		if n > 0 {
 			pending = append(pending, buf[:n]...)
-
-			for {
-				loc := oscNotifyRe.FindSubmatchIndex(pending)
-				if loc == nil {
-					break
-				}
-				body := string(pending[loc[2]:loc[3]])
-
-				sess.mu.Lock()
-				sess.lastNote = body
-				sess.mu.Unlock()
-
-				evt := proto.NotifyEvent{SessionID: sess.ID, Body: body, Time: time.Now()}
-				d.publishNotify(evt)
-				log.Printf("[notify] session=%s body=%q", sess.ID, body)
-
-				pending = pending[loc[1]:] // drop everything through the matched sequence
-			}
+			pending = d.scanNotes(sess, pending)
 
 			// Cap growth for chatty agents that never emit a notify sequence;
 			// keep only the tail, since a partial match can only ever start

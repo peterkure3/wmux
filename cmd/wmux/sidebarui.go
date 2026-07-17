@@ -219,7 +219,7 @@ func (m sidebarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch evt.Type {
 		case proto.EventNotify:
 			if evt.Notify != nil {
-				m.unread[evt.Notify.SessionID] = unreadNote{body: evt.Notify.Body, at: evt.Notify.Time}
+				m.unread[evt.Notify.SessionID] = unreadNote{body: evt.Notify.Display(), at: evt.Notify.Time}
 				m.ensureVisible() // blocks grow a line when a note appears
 			}
 		case proto.EventSessions:

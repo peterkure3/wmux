@@ -215,7 +215,7 @@ func (d *Daemon) handleNotify(w http.ResponseWriter, r *http.Request) {
 	d.mu.RUnlock()
 	if ok {
 		sess.mu.Lock()
-		sess.lastNote = evt.Body
+		sess.lastNote = evt.Display()
 		sess.mu.Unlock()
 	}
 
