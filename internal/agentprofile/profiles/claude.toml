@@ -1,0 +1,21 @@
+# Claude Code — settings.json command hooks deliver the event payload as
+# JSON on stdin:
+#   {"session_id":"abc123","cwd":"/home/you/proj","hook_event_name":"Notification","message":"Claude is waiting for your input"}
+#
+# Wire it up in ~/.claude/settings.json (or the project's .claude/settings.json):
+#   {
+#     "hooks": {
+#       "Notification": [
+#         { "matcher": "", "hooks": [{ "type": "command", "command": "wmux hook run claude" }] }
+#       ]
+#     }
+#   }
+#
+# No event filter: which events fire is chosen in settings.json itself, and
+# any event whose message is empty is skipped anyway (no default_message).
+name = "claude"
+wire = "stdin-json"
+session_field = "session_id"
+cwd_field = "cwd"
+message_field = "message"
+event_field = "hook_event_name"

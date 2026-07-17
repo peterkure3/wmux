@@ -1,0 +1,11 @@
+# Kimi Code CLI (Moonshot) — [[hooks]] in its config deliver stdin JSON
+# with the same field names as Claude Code (their hooks are explicitly
+# modeled on Claude Code's), so the profile mirrors claude.toml.
+#
+# Point a hook's command at: wmux hook run kimi
+name = "kimi"
+wire = "stdin-json"
+session_field = "session_id"
+cwd_field = "cwd"
+message_field = "message"
+event_field = "hook_event_name"

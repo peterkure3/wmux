@@ -208,9 +208,14 @@ GOOS=windows GOARCH=amd64 go build -o bin/wmux.exe  ./cmd/wmux
 
 ## Wiring real agent hooks
 
-`wmux` has two dedicated subcommands that speak each agent's actual wire
-format — don't use `wmux notify` directly for these, it's just the manual
-testing entry point.
+Agent hooks go through one generic handler, `wmux hook run <agent>`,
+driven by a per-agent TOML profile describing that agent's wire format
+(stdin JSON vs. JSON-as-final-argument) and field names. Profiles for
+**claude, codex, kimi, kiro** ship inside the binary — `wmux hook list`
+shows what's known. `wmux hook-claude` and `wmux hook-codex` remain as
+aliases for `wmux hook run claude`/`wmux hook run codex`, so existing
+configs keep working. Don't use `wmux notify` directly for agent wiring —
+it's just the manual testing entry point.
 
 ### Claude Code
 
@@ -268,6 +273,36 @@ The forward runs first and unconditionally — every event type, even when
 notify itself is best-effort in this mode, so a wmux problem can never
 break the app's own notification chain.
 
+### Kimi Code, Kiro — and any other agent that copied Claude Code's hooks
+
+Several newer CLI agents (Kimi Code CLI, Kiro CLI) adopted Claude Code's
+hook payload shape outright — stdin JSON with the same `session_id` /
+`cwd` / `hook_event_name` / `message` field names. Bundled profiles cover
+them already: point the agent's hook command at `wmux hook run kimi` /
+`wmux hook run kiro` in its own hooks config.
+
+For an agent wmux doesn't know yet, drop a profile at
+`~/.wmux/agents/<name>.toml` (a user file with a bundled name replaces
+the bundled profile wholesale):
+
+```toml
+name = "someagent"
+wire = "stdin-json"            # or "argv-json" (payload as final CLI argument)
+session_field = "session_id"   # dot-paths into the JSON payload
+cwd_field = "cwd"              # session fallback when session_field is empty
+message_field = "message"
+event_field = "hook_event_name"
+event_allow = ["Stop"]         # empty/omitted = notify on every event
+# default_message = "turn done"  # used when the message field is empty;
+                                 # omitted = empty message sends nothing
+# session_fallback = "getwd"     # last-resort session ID = hook's cwd
+```
+
+Then run `wmux hook run someagent` from the agent's hook — no new Go code
+involved. `--session ID` overrides the payload's session; `--forward`
+chains a pre-existing handler exactly as described for Codex above (for
+stdin-wire agents the payload is piped to the forwarded command's stdin).
+
 ### Notifying without a hook (raw OSC)
 
 Anything running inside a tracked session can notify by printing an OSC
@@ -287,8 +322,9 @@ sidebar show them as `title: message`.
 
 ### Important: where the daemon needs to run
 
-Whichever of `wmux hook-claude` / `wmux hook-codex` actually gets invoked
-runs **wherever the agent process itself runs**. If Claude Code / Codex run
+Whichever `wmux hook run <agent>` command (or `hook-claude`/`hook-codex`
+alias) actually gets invoked runs **wherever the agent process itself
+runs**. If Claude Code / Codex run
 inside a WSL2 distro (the common case), the hook command needs a `wmux`
 binary reachable from inside that distro, and it needs to reach a `wmuxd`
 listening on `127.0.0.1:47823` from that same network namespace.

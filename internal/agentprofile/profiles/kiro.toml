@@ -1,0 +1,11 @@
+# Kiro CLI — hooks deliver stdin JSON with Claude Code's field names
+# (hook_event_name, session_id, cwd, plus tool_name/tool_input on tool
+# events), so the profile mirrors claude.toml.
+#
+# Point a hook's command at: wmux hook run kiro
+name = "kiro"
+wire = "stdin-json"
+session_field = "session_id"
+cwd_field = "cwd"
+message_field = "message"
+event_field = "hook_event_name"

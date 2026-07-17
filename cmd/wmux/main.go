@@ -42,10 +42,12 @@ func main() {
 	switch os.Args[1] {
 	case "notify":
 		cmdNotify(os.Args[2:])
-	case "hook-claude":
-		cmdHookClaude(os.Args[2:])
-	case "hook-codex":
-		cmdHookCodex(os.Args[2:])
+	case "hook":
+		cmdHook(os.Args[2:])
+	case "hook-claude": // legacy alias, kept so existing ~/.claude/settings.json wiring keeps working
+		runHook("hook-claude", "claude", os.Args[2:])
+	case "hook-codex": // legacy alias, kept so existing ~/.codex/config.toml wiring keeps working
+		runHook("hook-codex", "codex", os.Args[2:])
 	case "new":
 		cmdNew(os.Args[2:])
 	case "attach":
@@ -102,9 +104,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, banner)
 	fmt.Fprintln(os.Stderr, `usage:
   wmux notify <message> --session ID     manually push a notification (testing)
-  wmux hook-claude                       Claude Code Notification hook (reads stdin JSON)
-  wmux hook-codex --session ID <json>    Codex 'notify' config target (JSON as final arg);
+  wmux hook run <agent> [--session ID]   generic agent hook target, driven by a per-agent profile
+                                          (bundled: claude, codex, kimi, kiro; override or add via
+                                          ~/.wmux/agents/<agent>.toml);
                                           --forward TOKEN (repeatable) chains a pre-existing notify handler
+  wmux hook list                         list known agent profiles
+  wmux hook-claude                       alias for 'wmux hook run claude' (reads stdin JSON)
+  wmux hook-codex --session ID <json>    alias for 'wmux hook run codex' (JSON as final arg)
   wmux new --id ID --cwd PATH --cmd CMD  spawn a new HEADLESS agent session (no TTY; daemon owns the pipe)
   wmux attach --id ID --cwd PATH -- CMD  run CMD interactively (real TTY), tracked by the daemon
   wmux surface --id ID --cwd PATH --cmd CMD [--native] [--distro D]
@@ -183,48 +189,6 @@ func pushNotifyErr(session, body string) error {
 	return nil
 }
 
-// cmdHookClaude is the command to point Claude Code's Notification hook at.
-// Claude Code invokes command hooks with the event payload on **stdin** as
-// JSON, e.g.:
-//
-//	{"session_id":"abc123","cwd":"/home/you/proj","hook_event_name":"Notification","message":"Claude is waiting for your input"}
-//
-// Wire it up in ~/.claude/settings.json (or the project's .claude/settings.json):
-//
-//	{
-//	  "hooks": {
-//	    "Notification": [
-//	      { "matcher": "", "hooks": [{ "type": "command", "command": "wmux hook-claude" }] }
-//	    ]
-//	  }
-//	}
-//
-// Claude Code's own session_id becomes the wmux session ID directly — the
-// daemon doesn't require a session to have been pre-registered via `wmux new`
-// for a notify to be accepted, so this works standalone.
-func cmdHookClaude(args []string) {
-	var payload struct {
-		SessionID     string `json:"session_id"`
-		Cwd           string `json:"cwd"`
-		Message       string `json:"message"`
-		HookEventName string `json:"hook_event_name"`
-	}
-	if err := json.NewDecoder(os.Stdin).Decode(&payload); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux hook-claude: could not parse stdin payload: %v\n", err)
-		os.Exit(1)
-	}
-
-	sessionID := payload.SessionID
-	if sessionID == "" {
-		sessionID = payload.Cwd // best-effort fallback if Claude Code omits session_id
-	}
-	if payload.Message == "" {
-		return // nothing to notify about
-	}
-
-	pushNotify(sessionID, payload.Message, "hook-claude")
-}
-
 // resolveCmd expands a --cmd value of "-" by reading the command from
 // stdin. Between the caller's shell and the daemon a command can cross
 // Git Bash, PowerShell, wsl.exe, and JSON — each mangles quoting and
@@ -254,102 +218,6 @@ func (m *multiFlag) String() string { return strings.Join(*m, " ") }
 func (m *multiFlag) Set(v string) error {
 	*m = append(*m, v)
 	return nil
-}
-
-// cmdHookCodex is the command to point Codex's `notify` config at. Unlike
-// Claude Code, Codex appends the JSON payload as the **final CLI argument**,
-// not stdin, e.g.:
-//
-//	wmux hook-codex --session my-project '{"type":"agent-turn-complete","last-assistant-message":"All tests passed"}'
-//
-// Wire it up in ~/.codex/config.toml (root keys must come before any [tables]):
-//
-//	notify = ["wmux", "hook-codex", "--session", "my-project"]
-//
-// Codex allows exactly one `notify` command, and the Codex desktop app
-// claims it for its own handler (codex-computer-use.exe turn-ended on the
-// machine this was built against). --forward chains such a pre-existing
-// handler instead of displacing it: each --forward occurrence is one argv
-// token, and the JSON payload is appended when invoking it — exactly what
-// Codex itself would have done:
-//
-//	notify = ["C:\\wmux\\wmux.exe", "hook-codex", "--session", "codex",
-//	          "--forward", "C:\\...\\codex-computer-use.exe", "--forward", "turn-ended"]
-//
-// The forward runs first and unconditionally (every event type, and even
-// when wmuxd is unreachable — wmux problems must never break the original
-// chain); its exit code is propagated. The wmux notify itself is
-// best-effort when forwarding.
-//
-// Codex currently only supports the agent-turn-complete event through
-// `notify`, so anything else is ignored (but still forwarded). --session
-// is a fixed label you choose per config.toml (Codex doesn't hand you a
-// stable per-project ID through this mechanism) — falls back to the
-// current working directory if omitted.
-func cmdHookCodex(args []string) {
-	fs := newFlagSet("hook-codex")
-	session := fs.String("session", "", "session ID (falls back to cwd if omitted)")
-	var forward multiFlag
-	fs.Var(&forward, "forward", "argv token of a pre-existing notify handler to chain (repeat once per token; JSON payload is appended)")
-	fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "wmux hook-codex: missing JSON payload argument")
-		os.Exit(1)
-	}
-	payloadArg := fs.Arg(0)
-
-	// Forward before anything else — the original handler must fire even
-	// if the payload doesn't parse or wmuxd is down.
-	forwardExit := 0
-	if len(forward) > 0 {
-		fcmd := exec.Command(forward[0], append(append([]string{}, forward[1:]...), payloadArg)...)
-		fcmd.Stdout = os.Stdout
-		fcmd.Stderr = os.Stderr
-		if err := fcmd.Run(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				forwardExit = exitErr.ExitCode()
-			} else {
-				fmt.Fprintf(os.Stderr, "wmux hook-codex: forward %q failed: %v\n", forward[0], err)
-				forwardExit = 1
-			}
-		}
-	}
-
-	var payload struct {
-		Type             string `json:"type"`
-		LastAssistantMsg string `json:"last-assistant-message"`
-	}
-	if err := json.Unmarshal([]byte(payloadArg), &payload); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux hook-codex: could not parse payload argument: %v\n", err)
-		os.Exit(max(forwardExit, 1))
-	}
-
-	if payload.Type != "agent-turn-complete" {
-		os.Exit(forwardExit) // only event type Codex's `notify` config currently emits; forward already ran
-	}
-
-	sessionID := *session
-	if sessionID == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			sessionID = cwd
-		}
-	}
-
-	body := payload.LastAssistantMsg
-	if body == "" {
-		body = "Codex finished a turn"
-	}
-
-	if len(forward) > 0 {
-		// Best-effort when chaining: an unreachable wmuxd must not turn a
-		// successfully forwarded event into a nonzero exit for Codex.
-		if err := pushNotifyErr(sessionID, body); err != nil {
-			fmt.Fprintf(os.Stderr, "wmux hook-codex: warning: %v\n", err)
-		}
-		os.Exit(forwardExit)
-	}
-	pushNotify(sessionID, body, "hook-codex")
 }
 
 // cmdAttach runs a command interactively with full TTY passthrough — real

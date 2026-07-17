@@ -3,6 +3,7 @@ module github.com/peterkure/wmux
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff

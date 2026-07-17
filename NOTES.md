@@ -453,6 +453,44 @@ terminal), `--with`, and the TUI's `n` prompt flow.
   with a hand-constructed payload matching the documented format)
 - Session persistence / restart behavior beyond a single daemon lifetime
 
+## Generic hook layer (2026-07-17)
+
+Per-agent hook subcommands replaced by one data-driven handler:
+`wmux hook run <agent>` reads a TOML profile
+(`internal/agentprofile`, bundled via `embed.FS`, user override =
+whole-file replacement at `~/.wmux/agents/<name>.toml`) declaring the
+wire (`stdin-json` | `argv-json`) and dot-path field mappings
+(session/cwd/message/event), an `event_allow` filter, `default_message`,
+and `session_fallback = "getwd"`. `hook-claude`/`hook-codex` are now thin
+aliases (`runHook`) — existing `~/.claude/settings.json` /
+`~/.codex/config.toml` wiring untouched. `wmux hook list` enumerates
+profiles.
+
+Parity was the acceptance bar: exit-code contract of the old commands
+kept bit-identical (forward runs first and unconditionally, parse error
+exits `max(forwardExit,1)`, filtered event / empty message exits
+`forwardExit`, best-effort notify when forwarding). Old claude quirk
+preserved deliberately: empty `session_id`+`cwd` sends an empty session
+ID (no `os.Getwd` fallback — that's codex-profile behavior, opted into
+via `session_fallback`). `--forward` on stdin-wire agents pipes the
+payload to the forwarded command's stdin (new capability, untested
+against a real chained handler).
+
+**Verified (2026-07-17, native Windows, test daemon on :47899):** all
+four bundled profiles load; claude/codex payloads through both `hook run`
+and the legacy aliases land in `wmux watch`; empty-message skip, event
+filter, garbage payload, missing argv payload, unknown agent, forward
+exit-code propagation (exit 3 propagated, also with garbage payload).
+Unit tests: `internal/agentprofile` (load/override/validate/extract) and
+`cmd/wmux/hookrun_test.go` (decision parity against documented payloads).
+
+**Assumed, not verified against live agents:** kimi/kiro profiles are
+built from their official docs (both copied Claude Code's field names);
+no live Kimi/Kiro invocation has fired a hook here yet. **Deliberately
+not shipped:** mimo/agy profiles — payload shapes unverified; do not add
+profiles for them without a captured real payload (repo discipline:
+verified vs. assumed stays explicit).
+
 ## Not yet built (see README "Next steps" for the live list)
 
 - Tray/sidebar UI (Wails or Tauri, subscribing to `GET /events` SSE and

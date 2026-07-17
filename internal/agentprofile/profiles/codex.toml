@@ -1,0 +1,19 @@
+# Codex CLI — the `notify` key in ~/.codex/config.toml appends the JSON
+# payload as the final CLI argument (not stdin):
+#   wmux hook run codex --session my-project '{"type":"agent-turn-complete","last-assistant-message":"All tests passed"}'
+#
+# Wire it up in ~/.codex/config.toml (root keys must come before any [tables]):
+#   notify = ["wmux", "hook", "run", "codex", "--session", "my-project"]
+#
+# Codex allows exactly one notify command; --forward chains a pre-existing
+# handler (e.g. the Codex desktop app's own) instead of displacing it.
+#
+# The payload carries no session ID, so --session (or the hook process's
+# working directory) labels the session instead.
+name = "codex"
+wire = "argv-json"
+message_field = "last-assistant-message"
+event_field = "type"
+event_allow = ["agent-turn-complete"]
+default_message = "Codex finished a turn"
+session_fallback = "getwd"

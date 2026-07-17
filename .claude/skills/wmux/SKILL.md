@@ -14,9 +14,12 @@ description: >
 # wmux
 
 Local HTTP+SSE daemon (`wmuxd`) that tracks agent coding sessions (Claude
-Code, Codex) — watches for OSC 9/99/777 notify escape sequences, polls git
-branch + listening ports, and lets `wmux hook-claude`/`wmux hook-codex`
-push notifications into it from agent hooks. `wmux` is the CLI.
+Code, Codex, Kimi, Kiro) — watches for OSC 9/99/777 notify escape
+sequences, polls git branch + listening ports, and lets `wmux hook run
+<agent>` push notifications into it from agent hooks (profile-driven;
+`wmux hook list` shows known agents, `~/.wmux/agents/<name>.toml`
+overrides/adds profiles; `hook-claude`/`hook-codex` are legacy aliases).
+`wmux` is the CLI.
 
 Two binaries, one Go module. Source: `cmd/wmuxd`, `cmd/wmux`,
 `internal/daemon`, `internal/proto`. Full background/rationale in
