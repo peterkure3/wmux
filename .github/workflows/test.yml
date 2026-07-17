@@ -5,16 +5,33 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: these jobs only read the repo. Also neutralizes the
+# default token's write scopes if a compromised dependency tries to use it.
+permissions:
+  contents: read
+
+# Supply-chain posture (audited 2026-07-17):
+# - Only first-party actions/* actions, each pinned to a full commit SHA
+#   (a version tag can be silently re-pointed at malicious code; a SHA
+#   cannot). Bump by editing the SHA, verify against the actions repo.
+# - persist-credentials: false — the build/test steps never need the repo
+#   token, so don't leave it sitting in .git/config for anything that runs
+#   inside the job (tests execute arbitrary repo code).
+# - go mod verify re-checks downloaded modules against go.sum hashes, so a
+#   poisoned module proxy/cache fails the build instead of linking in.
 jobs:
   # Linux runner gets the race detector (needs cgo; the Windows dev
   # machine has no gcc) and matches the bin/linux-amd64 build target.
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: stable
+      - run: go mod verify
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -count=1 ./...
@@ -22,10 +39,13 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: stable
+      - run: go mod verify
       - run: go vet ./...
       - run: go build ./...
       - run: go test -count=1 ./...
