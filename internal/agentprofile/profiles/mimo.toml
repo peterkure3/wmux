@@ -1,0 +1,16 @@
+# mimo (mimocode) — no command hooks; its opencode-style plugin system
+# delivers events instead. The bundled integrations/mimo/wmux-notify.js
+# plugin listens for session.idle/session.error on mimo's event bus and
+# pipes a Claude-shaped JSON payload to `wmux hook run mimo` — this
+# profile and that plugin define the payload together, so the fields
+# below are by construction, not reverse-engineered.
+#
+# Install the plugin: copy integrations/mimo/wmux-notify.js to
+#   ~/.config/mimocode/plugin/wmux-notify.js
+# Session label is "mimo" (override with WMUX_SESSION in mimo's env).
+name = "mimo"
+wire = "stdin-json"
+session_field = "session_id"
+cwd_field = "cwd"
+message_field = "message"
+event_field = "hook_event_name"
