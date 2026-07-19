@@ -518,6 +518,10 @@ func pidVisible(native bool, command string) bool {
 func (d *Daemon) markExited(sess *Session) {
 	sess.mu.Lock()
 	sess.running = false
+	// An exited session owns no processes, so it owns no listening ports —
+	// keeping the last polled set around just misleads (`wmux list` showing
+	// ports for a dead session).
+	sess.ports = nil
 	sess.mu.Unlock()
 	d.save()
 	d.publishSessions()
@@ -570,7 +574,7 @@ func listeningPorts(distro string, pid int, native bool) []int {
 		if pid == 0 {
 			return nil
 		}
-		return listeningPortsForTree(processTree(pid))
+		return normalizePorts(listeningPortsForTree(processTree(pid)))
 	}
 
 	args := append(wslArgs(distro), "--exec", "ss", "-ltn")
@@ -594,5 +598,5 @@ func listeningPorts(distro string, pid int, native bool) []int {
 			ports = append(ports, p)
 		}
 	}
-	return ports
+	return normalizePorts(ports)
 }

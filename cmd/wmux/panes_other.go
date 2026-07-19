@@ -7,3 +7,8 @@ package main
 func findWindowForPID(pid int) (hwnd uintptr, title string, ok bool) {
 	return 0, "", false
 }
+
+// wtPanesByTitle is Windows-only for the same reason.
+func wtPanesByTitle(ids []string) map[string]string {
+	return nil
+}

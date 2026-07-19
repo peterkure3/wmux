@@ -46,20 +46,39 @@ func cmdPanes(args []string) {
 		return
 	}
 
-	fmt.Printf("%-20s %-8s %-8s %-8s %s\n", "ID", "RUNNING", "PID", "WINDOW", "TITLE")
+	// Two-pass window resolution. PID enumeration only answers for a
+	// process that owns its own console window; a WT-hosted pane's window
+	// belongs to WindowsTerminal.exe, so every `wmux pane` session used to
+	// show WINDOW=none. Those (and WSL sessions, whose panes are addressable
+	// the same way) fall back to one batched UIA title lookup — the pane's
+	// fixed title is its session ID, same addressing as `wmux focus --id`.
+	type resolved struct{ window, title string }
+	rows := make(map[string]resolved, len(sessions))
+	var uiaIDs []string
 	for _, s := range sessions {
-		windowCol := "n/a"
-		title := ""
-		if !s.Native {
-			windowCol = "wsl"
-		} else if s.Running && s.PID != 0 {
-			if hwnd, wtitle, ok := findWindowForPID(s.PID); ok {
-				windowCol = fmt.Sprintf("0x%x", hwnd)
-				title = wtitle
-			} else {
-				windowCol = "none"
+		r := resolved{window: "n/a"}
+		if s.Running {
+			if s.Native && s.PID != 0 {
+				if hwnd, wtitle, ok := findWindowForPID(s.PID); ok {
+					rows[s.ID] = resolved{fmt.Sprintf("0x%x", hwnd), wtitle}
+					continue
+				}
 			}
+			r.window = "none"
+			uiaIDs = append(uiaIDs, s.ID)
 		}
-		fmt.Printf("%-20s %-8v %-8d %-8s %s\n", s.ID, s.Running, s.PID, windowCol, title)
+		rows[s.ID] = r
+	}
+	wtWins := wtPanesByTitle(uiaIDs)
+	for id, hwnd := range wtWins {
+		// wt:<hwnd> = a WT window contains a pane/tab with this session's
+		// title; the handle is the WT window's, not one the session owns.
+		rows[id] = resolved{"wt:" + hwnd, id}
+	}
+
+	fmt.Printf("%-20s %-8s %-8s %-12s %s\n", "ID", "RUNNING", "PID", "WINDOW", "TITLE")
+	for _, s := range sessions {
+		r := rows[s.ID]
+		fmt.Printf("%-20s %-8v %-8d %-12s %s\n", s.ID, s.Running, s.PID, r.window, r.title)
 	}
 }

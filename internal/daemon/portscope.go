@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -132,6 +133,24 @@ func buildTree(rootPID int, parents map[int]int) map[int]bool {
 		}
 	}
 	return tree
+}
+
+// normalizePorts sorts and deduplicates a port list. Raw sources repeat
+// ports freely (one socket per address family/interface — the same :53
+// shows up for every dnsmasq bind), and a stable order keeps equalInts
+// from reporting a change when only enumeration order moved.
+func normalizePorts(ports []int) []int {
+	if len(ports) < 2 {
+		return ports
+	}
+	sort.Ints(ports)
+	out := ports[:1]
+	for _, p := range ports[1:] {
+		if p != out[len(out)-1] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // listeningPortsForTree returns the local listening ports owned by any

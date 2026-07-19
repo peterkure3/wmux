@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -517,6 +518,7 @@ func cmdPaneExec(args []string) {
 		}
 	}
 	if !claimed {
+		pushNotifyErr(id, fmt.Sprintf("pane %s failed: no pending pane spec claimed", id))
 		paneExecFail("no pending pane spec for session %q — was this pane opened by 'wmux pane'?", id)
 	}
 
@@ -570,6 +572,14 @@ func cmdPaneExec(args []string) {
 				}
 				fmt.Fprintf(os.Stderr, "wmux pane-exec: command %q exited with code %d after %s%s\n",
 					spec.Command, exitErr.ExitCode(), elapsed.Round(100*time.Millisecond), hint)
+				// The pane erases itself when the hold ends (closeOnExit
+				// "always"), taking the error text with it — anyone not
+				// staring at the pane sees nothing. Push the failure to the
+				// daemon the spec was claimed from so it lands in `wmux
+				// watch` and the sidebar too. Best-effort: the hold and exit
+				// code matter more than a notify that can't be delivered.
+				pushNotifyErr(spec.ID, fmt.Sprintf("pane %s failed: %q exited with code %d after %s%s",
+					spec.ID, spec.Command, exitErr.ExitCode(), elapsed.Round(100*time.Millisecond), hint))
 				time.Sleep(paneHoldOpen)
 			}
 			os.Exit(exitErr.ExitCode())
@@ -796,12 +806,27 @@ func cmdClose(args []string) {
 		os.Exit(1)
 	}
 
-	if err := closeSession(*id); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux close: %v\n", err)
-		os.Exit(1)
+	err := closeSession(*id)
+	if err == nil {
+		fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
+		return
 	}
-	fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
+	// Unknown locally: a WSL-path pane session only ever registered with
+	// the WSL-resident daemon (see bridge.go) — try there before failing.
+	if errors.Is(err, errSessionNotFound) {
+		if werr := wslDaemonClose(*id); werr == nil {
+			fmt.Printf("closed session %s on the WSL daemon (a pane opened by wmux pane closes itself)\n", *id)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "wmux close: %v\n", err)
+	os.Exit(1)
 }
+
+// errSessionNotFound marks a close rejected because the daemon doesn't
+// know the ID — the one failure where trying the WSL daemon makes sense
+// (any other error would just repeat over there).
+var errSessionNotFound = errors.New("session not found")
 
 // closeSession asks the daemon to kill a session's tracked process —
 // shared by `wmux close` and the sidebar's x action.
@@ -813,6 +838,10 @@ func closeSession(id string) error {
 		return fmt.Errorf("could not reach wmuxd: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%w: %s", errSessionNotFound, strings.TrimSpace(string(body)))
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("daemon returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
@@ -821,27 +850,37 @@ func closeSession(id string) error {
 }
 
 func cmdList(args []string) {
-	resp, err := http.Get(daemonAddr + "/sessions")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wmux list: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+	fs := newFlagSet("list")
+	jsonOut := fs.Bool("json", false, "print the local daemon's session list as JSON (this is also the WSL bridge's wire format)")
+	fs.Parse(args)
+
+	sessions := fetchSessions("list")
+
+	// --json is the bridge's own wire format (see bridge.go), so it stays
+	// strictly local — a bridged bridge would recurse across the boundary.
+	if *jsonOut {
+		json.NewEncoder(os.Stdout).Encode(sessions)
+		return
 	}
-	defer resp.Body.Close()
 
-	var sessions []proto.SessionInfo
-	json.NewDecoder(resp.Body).Decode(&sessions)
-
-	if len(sessions) == 0 {
+	remote := wslDaemonSessions()
+	if len(sessions) == 0 && len(remote) == 0 {
 		fmt.Println("no sessions")
 		return
 	}
-	for _, s := range sessions {
+	printSessionRow := func(s proto.SessionInfo, origin string) {
 		status := "idle"
 		if !s.Running {
 			status = "exited"
 		}
-		fmt.Printf("%-20s %-10s %-20s branch=%-15s ports=%v note=%q\n",
-			s.ID, status, s.Cwd, s.Branch, s.Ports, s.LastNote)
+		fmt.Printf("%-20s %-10s %-20s branch=%-15s ports=%v note=%q%s\n",
+			s.ID, status, s.Cwd, s.Branch, s.Ports, s.LastNote, origin)
+	}
+	for _, s := range sessions {
+		printSessionRow(s, "")
+	}
+	for _, s := range remote {
+		printSessionRow(s, " [wsl]")
 	}
 }
 
