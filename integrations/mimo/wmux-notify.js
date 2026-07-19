@@ -17,7 +17,18 @@ export const WmuxNotify = async ({ directory }) => {
   const { spawn } = await import("node:child_process");
   const wmux = process.platform === "win32" ? "wmux.exe" : "wmux";
 
+  // One agent turn fans out into several bus events (observed live: a
+  // single `mimo run` emitted 4x session.idle — internal sub-sessions
+  // like title generation idle too, within ~1.5s). Debounce per event
+  // type so the human gets one notification per turn, not one per
+  // internal session.
+  const DEBOUNCE_MS = 5000;
+  const lastSent = new Map();
+
   const send = (eventName, message) => {
+    const now = Date.now();
+    if (now - (lastSent.get(eventName) ?? 0) < DEBOUNCE_MS) return;
+    lastSent.set(eventName, now);
     try {
       const child = spawn(wmux, ["hook", "run", "mimo"], {
         stdio: ["pipe", "ignore", "ignore"],
@@ -43,7 +54,13 @@ export const WmuxNotify = async ({ directory }) => {
       if (event.type === "session.idle") {
         send("session.idle", "mimo finished a turn");
       } else if (event.type === "session.error") {
-        send("session.error", "mimo hit an error");
+        // Carry whatever detail the event has — a bare "hit an error" was
+        // observed even on turns that succeeded, so the detail is the only
+        // way to judge whether it matters.
+        const err = event.properties?.error;
+        const detail =
+          typeof err === "string" ? err : err?.name || err?.data?.message || "";
+        send("session.error", "mimo hit an error" + (detail ? ": " + detail : ""));
       }
     },
   };

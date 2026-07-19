@@ -109,6 +109,7 @@ func runHook(cmdName, agent string, args []string) {
 	fs := newFlagSet(cmdName)
 	session := fs.String("session", "", "session ID override (profile decides the fallback)")
 	logFile := fs.String("log", "", "append every raw payload to this file (debugging aid for verifying what an agent actually sends)")
+	bestEffort := fs.Bool("best-effort", false, "always exit 0 on delivery problems (for hosts like Antigravity that treat a nonzero hook exit as a turn-crashing failure)")
 	var forward multiFlag
 	fs.Var(&forward, "forward", "argv token of a pre-existing notify handler to chain (repeat once per token; payload is passed through)")
 	fs.Parse(args)
@@ -180,15 +181,20 @@ func runHook(cmdName, agent string, args []string) {
 	dec, err := evalHook(p, raw, *session, os.Getwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux %s: could not parse %s: %v\n", cmdName, payloadWord, err)
+		if *bestEffort {
+			os.Exit(forwardExit)
+		}
 		os.Exit(max(forwardExit, 1))
 	}
 	if !dec.Notify {
 		os.Exit(forwardExit)
 	}
 
-	if len(forward) > 0 {
-		// Best-effort when chaining: an unreachable wmuxd must not turn a
-		// successfully forwarded event into a nonzero exit for the agent.
+	if len(forward) > 0 || *bestEffort {
+		// Best-effort when chaining (an unreachable wmuxd must not turn a
+		// successfully forwarded event into a nonzero exit for the agent),
+		// or when the host demands it: Antigravity treats any nonzero hook
+		// exit as a failure that can kill the whole turn.
 		if err := pushNotifyErr(dec.Session, dec.Body); err != nil {
 			fmt.Fprintf(os.Stderr, "wmux %s: warning: %v\n", cmdName, err)
 		}

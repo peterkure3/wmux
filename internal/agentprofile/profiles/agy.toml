@@ -1,0 +1,26 @@
+# agy (Google Antigravity CLI) — hooks are a Claude Code clone: stdin
+# JSON with session_id / cwd / hook_event_name, and the Notification
+# event carries a message field (plus notification_type). DOC-DERIVED,
+# not yet fired from a live install (same provenance as kimi/kiro when
+# they shipped); verify the first live event with --log and adjust if
+# reality disagrees.
+#
+# Wire it up in ~/.gemini/antigravity-cli/hooks.json (global) or
+# <project>/.agents/hooks.json:
+#   { "wmux-notify": {
+#       "Notification": [ { "matcher": "", "hooks": [
+#         { "type": "command", "command": "wmux hook run agy --best-effort" } ] } ],
+#       "Stop":         [ { "matcher": "", "hooks": [
+#         { "type": "command", "command": "wmux hook run agy --best-effort" } ] } ] } }
+#
+# --best-effort matters here: Antigravity treats a nonzero hook exit as
+# a failure that can kill the turn, so delivery problems must not
+# propagate. Stop events carry no message; default_message below makes
+# them a turn-finished notification instead of being dropped.
+name = "agy"
+wire = "stdin-json"
+session_field = "session_id"
+cwd_field = "cwd"
+message_field = "message"
+event_field = "hook_event_name"
+default_message = "agy finished a turn"

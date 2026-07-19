@@ -484,12 +484,20 @@ exit-code propagation (exit 3 propagated, also with garbage payload).
 Unit tests: `internal/agentprofile` (load/override/validate/extract) and
 `cmd/wmux/hookrun_test.go` (decision parity against documented payloads).
 
-**Assumed, not verified against live agents:** kimi/kiro profiles are
-built from their official docs (both copied Claude Code's field names);
-no live Kimi/Kiro invocation has fired a hook here yet. **Deliberately
-not shipped:** mimo/agy profiles — payload shapes unverified; do not add
-profiles for them without a captured real payload (repo discipline:
-verified vs. assumed stays explicit).
+**Assumed, not verified against live agents:** kimi/kiro/agy profiles
+are built from their official docs (all three copied Claude Code's
+field names); no live Kimi/Kiro/Antigravity invocation has fired a hook
+here yet. agy additionally wants `--best-effort` in its hooks.json —
+Antigravity treats a nonzero hook exit as a turn-crashing failure.
+**Live-verified:** mimo, 2026-07-20 — mimo has no command hooks at all
+(opencode-style plugin bus instead), so
+`integrations/mimo/wmux-notify.js` listens for session.idle /
+session.error and pipes a payload it constructs itself to `wmux hook
+run mimo`; profile and plugin are designed together, and a real
+`mimo run` turn produced exactly one notification (the plugin
+debounces the 4x session.idle fan-out one turn emits). Use
+`wmux hook run <agent> --log FILE` to capture raw payloads when
+verifying a new agent live.
 
 ## Not yet built (see README "Next steps" for the live list)
 
