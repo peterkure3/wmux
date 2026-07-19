@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/peterkure/wmux/internal/agentprofile"
 )
@@ -107,6 +108,7 @@ func evalHook(p *agentprofile.Profile, raw []byte, flagSession string, getwd fun
 func runHook(cmdName, agent string, args []string) {
 	fs := newFlagSet(cmdName)
 	session := fs.String("session", "", "session ID override (profile decides the fallback)")
+	logFile := fs.String("log", "", "append every raw payload to this file (debugging aid for verifying what an agent actually sends)")
 	var forward multiFlag
 	fs.Var(&forward, "forward", "argv token of a pre-existing notify handler to chain (repeat once per token; payload is passed through)")
 	fs.Parse(args)
@@ -135,6 +137,18 @@ func runHook(cmdName, agent string, args []string) {
 		}
 		raw = b
 		payloadWord = "stdin payload"
+	}
+
+	// Log the raw payload before any parsing or filtering — the whole
+	// point is capturing what the agent really sent when the profile's
+	// assumptions turn out wrong (an unexpected event type is filtered
+	// silently, so without this there is nothing to debug from). Strictly
+	// best-effort: a full disk or bad path must never break the hook chain.
+	if *logFile != "" {
+		if f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			fmt.Fprintf(f, "%s %s %s\n", time.Now().Format(time.RFC3339), agent, raw)
+			f.Close()
+		}
 	}
 
 	// Forward before anything else — the original handler must fire even
