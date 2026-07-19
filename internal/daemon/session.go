@@ -474,6 +474,14 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		ports := listeningPorts(sess.Distro, pid, native)
 
 		sess.mu.Lock()
+		// The shell-outs above take real time; if the session was closed
+		// meanwhile, writing their results would resurrect metadata on an
+		// exited session — markExited just cleared ports for good reason.
+		// (Seen live: `wmux list` showing a dead session with ports.)
+		if !sess.running {
+			sess.mu.Unlock()
+			return
+		}
 		changed := branch != sess.branch || !equalInts(ports, sess.ports)
 		sess.branch = branch
 		sess.ports = ports
