@@ -23,6 +23,11 @@ import (
 // is self-perpetuating.
 var defaultRepo = ""
 
+// up is cmdUpdate's progress bar. Package-level (nil outside an update run)
+// so fatalUpdate and the helpers below can clear/advance it without
+// threading it through every signature; all its methods are nil-safe.
+var up *updateProgress
+
 // cmdUpdate rebuilds wmux + wmuxd from the source repo and swaps the
 // binaries this executable is running from — the automated version of the
 // manual dance in MANUAL.md (stop daemon, go build, copy, restart).
@@ -66,6 +71,14 @@ func cmdUpdate(args []string) {
 		fatalUpdate("%v", err)
 	}
 
+	// Two builds + install always run; pull and the daemon stop/restart
+	// steps join the total as they become known.
+	steps := 3
+	if !*noPull {
+		steps++
+	}
+	up = newUpdateProgress(steps)
+
 	stagingDir, newVer, err := fetchFromSource(repo, !*noPull)
 	if stagingDir != "" {
 		defer os.RemoveAll(stagingDir)
@@ -76,12 +89,14 @@ func cmdUpdate(args []string) {
 
 	oldVer := version.String()
 	if newVer == oldVer && !strings.Contains(newVer, "dirty") {
+		up.clear()
 		fmt.Printf("already up to date (%s)\n", oldVer)
 		return
 	}
 
 	wasRunning := daemonRunning()
 	if wasRunning {
+		up.addSteps(2) // stop + restart wmuxd
 		sessions, err := listRunningSessions()
 		if err != nil {
 			// Fail closed: without the list there is no way to know whether
@@ -102,6 +117,7 @@ func cmdUpdate(args []string) {
 		// not: its ConPTY and screen state live inside the wmuxd process
 		// this update is about to restart. Refuse rather than silently
 		// killing agent sessions mid-turn.
+		up.clear() // warnings below print on their own lines
 		if len(surfaces) > 0 && !*killSurfaces {
 			fmt.Fprintf(os.Stderr, "wmux update: %d live surface(s) would be killed by the wmuxd restart (a surface's ConPTY dies with its daemon):\n", len(surfaces))
 			for _, s := range surfaces {
@@ -121,6 +137,7 @@ func cmdUpdate(args []string) {
 				fmt.Fprintf(os.Stderr, "  %s (cwd=%s)\n", s.ID, s.Cwd)
 			}
 		}
+		up.step("stopping wmuxd")
 		if err := stopDaemon(); err != nil {
 			fatalUpdate("%v — nothing was changed", err)
 		}
@@ -129,6 +146,7 @@ func cmdUpdate(args []string) {
 	wmuxDest := filepath.Join(deployDir, "wmux.exe")
 	wmuxdDest := filepath.Join(deployDir, "wmuxd.exe")
 
+	up.step("installing binaries")
 	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, "wmuxd.exe"), wmuxdDest)
 	if err != nil {
 		restoreBinary(wmuxdDest, wmuxdAside)
@@ -153,6 +171,7 @@ func cmdUpdate(args []string) {
 	}
 
 	if wasRunning {
+		up.step("restarting wmuxd")
 		if err := startDaemonDetached(wmuxdDest); err != nil {
 			fatalUpdate("update succeeded (%s -> %s) but wmuxd did not restart: %v — start %s manually", oldVer, newVer, err, wmuxdDest)
 		}
@@ -161,6 +180,7 @@ func cmdUpdate(args []string) {
 		}
 	}
 
+	up.clear()
 	fmt.Printf("updated wmux: %s -> %s\n", oldVer, newVer)
 }
 
@@ -169,6 +189,7 @@ func cmdVersion(args []string) {
 }
 
 func fatalUpdate(format string, a ...any) {
+	up.clear()
 	fmt.Fprintf(os.Stderr, "wmux update: "+format+"\n", a...)
 	os.Exit(1)
 }
@@ -205,6 +226,7 @@ func resolveRepo(flagVal string) (string, error) {
 // The caller removes stagingDir (returned even on error, once created).
 func fetchFromSource(repo string, pull bool) (stagingDir, ver string, err error) {
 	if pull {
+		up.step("pulling " + repo)
 		out, err := exec.Command("git", "-C", repo, "pull", "--ff-only").CombinedOutput()
 		if err != nil {
 			return "", "", fmt.Errorf("git pull failed (use --no-pull to build as-is):\n%s", strings.TrimSpace(string(out)))
@@ -246,6 +268,7 @@ func buildBinaries(repo, outDir, ver string) error {
 			"-X 'github.com/peterkure/wmux/internal/version.Version=%s'", ver)},
 	}
 	for _, b := range builds {
+		up.step("building " + b.out)
 		cmd := exec.Command("go", "build", "-ldflags", b.ldflags, "-o", filepath.Join(outDir, b.out), b.pkg)
 		cmd.Dir = repo
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -305,6 +328,7 @@ func stopDaemon() error {
 		// Bootstrap path: the running daemon predates the /shutdown
 		// endpoint. Kill it hard — state.json is persisted after every
 		// mutation, so nothing is lost.
+		up.clear()
 		fmt.Fprintln(os.Stderr, "note: running wmuxd predates /shutdown; stopping it via taskkill")
 		if out, err := exec.Command("taskkill", "/F", "/IM", "wmuxd.exe").CombinedOutput(); err != nil {
 			return fmt.Errorf("taskkill wmuxd.exe failed: %v\n%s", err, strings.TrimSpace(string(out)))
