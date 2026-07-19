@@ -45,6 +45,21 @@ func (p *updateProgress) step(label string) {
 		return
 	}
 	p.started++
+	p.paint(label, true)
+}
+
+// note repaints the current step's label without advancing the count —
+// for in-step progress like download percentages. TTY only: on redirected
+// output the one line per step is the log, and a note per chunk would
+// spam it.
+func (p *updateProgress) note(label string) {
+	if p == nil || !p.tty {
+		return
+	}
+	p.paint(label, false)
+}
+
+func (p *updateProgress) paint(label string, logLine bool) {
 	const width = 20
 	filled := 0
 	if p.total > 0 {
@@ -54,7 +69,9 @@ func (p *updateProgress) step(label string) {
 		strings.Repeat("#", filled), strings.Repeat("-", width-filled),
 		p.started, p.total, label)
 	if !p.tty {
-		fmt.Println(line)
+		if logLine {
+			fmt.Println(line)
+		}
 		return
 	}
 	pad := ""

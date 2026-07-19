@@ -48,6 +48,7 @@ func cmdUpdate(args []string) {
 	fs := newFlagSet("update")
 	repoFlag := fs.String("repo", "", "path to the wmux source repo (falls back to WMUX_REPO, then the path stamped into this binary)")
 	noPull := fs.Bool("no-pull", false, "build the repo as-is without git pull")
+	release := fs.String("release", "", `install a published GitHub release instead of building from source: "latest" or a tag like v0.2.0`)
 	killSurfaces := fs.Bool("kill-surfaces", false, "proceed even if live surfaces exist — the wmuxd restart kills them")
 	fs.Parse(args)
 
@@ -66,20 +67,36 @@ func cmdUpdate(args []string) {
 	// the next update tries again.
 	cleanupOld(deployDir)
 
-	repo, err := resolveRepo(*repoFlag)
-	if err != nil {
-		fatalUpdate("%v", err)
+	// Pick the fetch source. --release wins outright; otherwise build from
+	// the source repo — unless none is configured, in which case fall back
+	// to the latest release rather than dead-ending (a machine without a
+	// checkout or Go toolchain can still update).
+	var stagingDir, newVer string
+	if *release == "" {
+		if _, rerr := resolveRepo(*repoFlag); rerr != nil {
+			fmt.Fprintf(os.Stderr, "wmux update: %v — falling back to the latest GitHub release\n", rerr)
+			*release = "latest"
+		}
 	}
-
-	// Two builds + install always run; pull and the daemon stop/restart
-	// steps join the total as they become known.
-	steps := 3
-	if !*noPull {
-		steps++
+	if *release != "" {
+		// download + verify/extract + install; daemon stop/restart join
+		// the total once known.
+		up = newUpdateProgress(3)
+		stagingDir, newVer, err = fetchFromRelease(*release)
+	} else {
+		repo, rerr := resolveRepo(*repoFlag)
+		if rerr != nil {
+			fatalUpdate("%v", rerr)
+		}
+		// Two builds + install always run; pull and the daemon stop/restart
+		// steps join the total as they become known.
+		steps := 3
+		if !*noPull {
+			steps++
+		}
+		up = newUpdateProgress(steps)
+		stagingDir, newVer, err = fetchFromSource(repo, !*noPull)
 	}
-	up = newUpdateProgress(steps)
-
-	stagingDir, newVer, err := fetchFromSource(repo, !*noPull)
 	if stagingDir != "" {
 		defer os.RemoveAll(stagingDir)
 	}

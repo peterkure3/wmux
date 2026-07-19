@@ -138,8 +138,10 @@ func usage() {
   wmux list                              list sessions and their state
   wmux prune                             remove all exited sessions from daemon state
   wmux watch                             stream notifications as they arrive
-  wmux update [--repo PATH] [--no-pull] [--kill-surfaces]
-                                          rebuild from source and self-update wmux + wmuxd
+  wmux update [--repo PATH] [--no-pull] [--release latest|vX.Y.Z] [--kill-surfaces]
+                                          self-update wmux + wmuxd: rebuild from source, or with
+                                          --release install a published GitHub release (SHA256-verified;
+                                          also the automatic fallback when no source repo is configured)
                                           (refuses while live surfaces exist unless --kill-surfaces)
   wmux autostart install|uninstall|status
                                           register/remove wmuxd as a Task Scheduler logon task

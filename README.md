@@ -127,6 +127,14 @@ Caveats: a surface dies with the daemon (the ConPTY can't survive a wmuxd
 restart — it comes back as `exited`), and `wmux update` restarts wmuxd,
 so finish or close surfaces before updating.
 
+`wmux update` has two sources: the default rebuilds from the source repo
+(`--repo`/`WMUX_REPO`/the path stamped into the binary), and
+`--release latest` (or `--release vX.Y.Z`) downloads a published GitHub
+release instead — no Go toolchain or checkout needed. Release archives
+are verified against the release's `SHA256SUMS` before install, and a
+machine with no source repo configured falls back to `--release latest`
+automatically.
+
 Under the hood, `wmux pane` files a "pane spec" with the daemon and opens
 the pane on a dedicated `wmux` Windows Terminal profile (installed
 automatically as a [settings fragment](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions),
