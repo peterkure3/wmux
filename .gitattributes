@@ -1,0 +1,8 @@
+# The working tree is shared between Windows git (autocrlf=true) and WSL
+# git (no conversion) via /mnt/d — the same checkout must look clean to
+# both, or WSL builds stamp a phantom -dirty into `git describe`. Force LF
+# in the working tree for all text: Go, PowerShell, and every tool in this
+# repo handle LF on Windows fine, and identical bytes on disk is the only
+# state both gits agree on.
+* text=auto eol=lf
+*.exe binary
