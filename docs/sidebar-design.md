@@ -141,6 +141,41 @@ clicks resolve against a line→session `owner[]` map — `bubbles/list`
 assumes uniform per-item height and has no mouse hit-testing, so it
 doesn't fit here.
 
+## Themes
+
+Colors come from `sidebarstyles.go`, built on a Windows 11 logo palette
+(`deepBlue`/`skyBlue`/`cyanColor`/`brightCyan`/`whiteColor`/`slate`), same
+palette and three named themes as the `charmbracelet/bubbletea`+`lipgloss`
+task-board reference demo this was modeled on:
+
+- `midnight` (default) — dark terminal background, palette as accents.
+- `frost` — full-bleed white background, deep navy body text.
+- `gradient` — dark background, each session's ID/branch line cycles
+  through the four logo blues (`rowStyle`), selected session gets a solid
+  color bar (`selectedBarStyle`) instead of the classic reverse-video swap.
+
+Pick one with `wmux theme <name>` (`cmd/wmux/theme.go`), which validates
+the name and persists it to `~/.wmux/theme` — read fresh on every `wmux
+sidebar` launch regardless of environment, since a new WT pane inherits
+Windows Terminal's own process environment, not the shell the `wmux` CLI
+happened to be invoked from (a plain `$env:WMUX_THEME` in one PowerShell
+prompt often never reaches the pane). `wmux theme` with no argument
+prints the active theme and the full list. `WMUX_THEME` still works as a
+one-off override — checked first, ahead of the persisted file — useful
+for scripting/testing (`WMUX_THEME=gradient wmux sidebar`). Either way,
+resolved once at the sidebar process's own startup into the package-level
+`active` var; no runtime switch inside an already-open sidebar.
+
+A theme's `background`, when set, must repaint every row's *full* width,
+not just accent tokens — every `Render()` call wraps an already
+`padTrunc`'d string as one call (`styleDim.Render(padTrunc(...))`), never
+nested renders, since an inner style's own trailing ANSI reset would kill
+an outer style's background partway through the line. `bodyLines`' session
+row is the one place that needs three independently-rendered segments
+(marker, dot, rest) concatenated instead of one Render call, so the dot
+keeps its running-state color while the rest of the row still carries the
+theme's item color/background.
+
 ## Future / explicitly out of scope for v1
 
 - Native-window sidebar (Wails/Tauri) consuming the same API.

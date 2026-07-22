@@ -55,7 +55,7 @@ func (m sidebarModel) View() string {
 	sep := styleDim.Render(strings.Repeat("─", w))
 
 	var b strings.Builder
-	b.WriteString(padTrunc(" wmux", w) + "\n" + sep + "\n")
+	b.WriteString(styleTitle.Render(padTrunc(" wmux", w)) + "\n" + sep + "\n")
 
 	lines, _ := m.bodyLines()
 	for _, l := range lines {
@@ -68,9 +68,13 @@ func (m sidebarModel) View() string {
 	b.WriteString(sep + "\n")
 	summary := fmt.Sprintf(" %d sessions · %d unread", len(m.sessions), len(m.unread))
 	if !m.daemonOK {
+		// styleOffline.Render is nested inside styleDim's own Render below: its
+		// embedded reset code means the theme background doesn't carry across
+		// the few trailing pad columns after this substring. Cosmetic-only,
+		// and only visible with a --background theme while wmuxd is down.
 		summary += " · " + styleOffline.Render("wmuxd offline")
 	}
-	b.WriteString(padTrunc(summary, w) + "\n")
+	b.WriteString(styleDim.Render(padTrunc(summary, w)) + "\n")
 
 	// Context line: active prompt/confirmation, else last action result.
 	switch m.mode {
@@ -113,12 +117,28 @@ func (m sidebarModel) bodyLines() (lines []string, owner []int) {
 			tag = " wsl"
 		}
 
-		line1 := padTrunc(fmt.Sprintf("%s%s %s  %s%s", marker, dot, s.ID, s.Branch, tag), w)
-		// Inverse the whole selected row; otherwise color just the dot.
-		if i == m.selected {
-			line1 = styleInverse.Render(line1)
-		} else {
-			line1 = strings.Replace(line1, dot, dotStyle.Render(dot), 1)
+		padded := []rune(padTrunc(fmt.Sprintf("%s%s %s  %s%s", marker, dot, s.ID, s.Branch, tag), w))
+		var line1 string
+		switch {
+		case len(padded) < 3:
+			// Pathologically narrow pane — not enough room to slice out the
+			// marker/dot cleanly, just render the plain text.
+			line1 = string(padded)
+		case active.cursorReverse && i == m.selected:
+			// gradient: a solid rowColors bar instead of the classic reverse
+			// swap, matching the tui-demo reference's selected-row look.
+			line1 = selectedBarStyle(i).Render(string(padded))
+		case i == m.selected:
+			line1 = styleInverse.Render(string(padded))
+		default:
+			// Three independently-rendered segments (marker, dot, rest) so
+			// the dot keeps its state color while the rest of the row still
+			// carries the theme's background/item color — nesting one
+			// Render() inside another would lose the outer background after
+			// the inner segment's own trailing reset code.
+			base := rowStyle(i)
+			prefix, dotRune, suffix := string(padded[:2]), string(padded[2:3]), string(padded[3:])
+			line1 = base.Render(prefix) + dotStyle.Render(dotRune) + base.Render(suffix)
 		}
 		lines = append(lines, line1)
 		owner = append(owner, i)

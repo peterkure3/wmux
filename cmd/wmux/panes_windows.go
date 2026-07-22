@@ -32,10 +32,10 @@ type enumState struct {
 }
 
 var (
-	enumMu      sync.Mutex // one enumeration at a time; guards enumCur
-	enumCur     *enumState
-	enumCBOnce  sync.Once
-	enumCBAddr  uintptr
+	enumMu     sync.Mutex // one enumeration at a time; guards enumCur
+	enumCur    *enumState
+	enumCBOnce sync.Once
+	enumCBAddr uintptr
 )
 
 func enumWindowsCB() uintptr {

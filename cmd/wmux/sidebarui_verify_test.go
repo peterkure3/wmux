@@ -1,11 +1,14 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/peterkure/wmux/internal/proto"
 )
 
@@ -147,5 +150,86 @@ func TestPromptWidthFloor(t *testing.T) {
 	}
 	if got := promptWidth(1); got != 4 {
 		t.Fatalf("promptWidth(1) = %d, want floor 4", got)
+	}
+}
+
+// isolateHome points USERPROFILE/HOME at a fresh temp dir so
+// themeConfigPath (and anything else keyed off os.UserHomeDir) never
+// touches this machine's real ~/.wmux.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+}
+
+func TestCurrentSidebarThemeFallback(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("WMUX_THEME", "not-a-real-theme")
+	if got := currentSidebarTheme(); got.name != "midnight" {
+		t.Fatalf("unknown theme name = %q, want midnight fallback", got.name)
+	}
+	t.Setenv("WMUX_THEME", "")
+	if got := currentSidebarTheme(); got.name != "midnight" {
+		t.Fatalf("unset WMUX_THEME = %q, want midnight fallback", got.name)
+	}
+	t.Setenv("WMUX_THEME", "frost")
+	if got := currentSidebarTheme(); got.name != "frost" {
+		t.Fatalf("WMUX_THEME=frost = %q, want frost", got.name)
+	}
+}
+
+func TestThemePersistence(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("WMUX_THEME", "") // env unset, so currentSidebarTheme must read the persisted file
+
+	if got := currentSidebarTheme(); got.name != "midnight" {
+		t.Fatalf("before 'wmux theme' runs: %q, want midnight default", got.name)
+	}
+
+	cmdTheme([]string{"gradient"})
+	if got := currentSidebarTheme(); got.name != "gradient" {
+		t.Fatalf("after 'wmux theme gradient': %q, want gradient", got.name)
+	}
+
+	path := themeConfigPath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("themeConfigPath %s not written: %v", path, err)
+	}
+	if got := strings.TrimSpace(string(b)); got != "gradient" {
+		t.Fatalf("persisted file content = %q, want gradient", got)
+	}
+
+	// An env var still wins over the persisted file.
+	t.Setenv("WMUX_THEME", "frost")
+	if got := currentSidebarTheme(); got.name != "frost" {
+		t.Fatalf("WMUX_THEME=frost should override persisted gradient, got %q", got.name)
+	}
+}
+
+// TestRowStyleGradientCycle only exercises anything under
+// WMUX_THEME=gradient — active is resolved once at process start, so this
+// skips for every other theme the suite happens to run under. Run
+// explicitly with: WMUX_THEME=gradient go test ./cmd/wmux/ -run RowStyle
+func TestRowStyleGradientCycle(t *testing.T) {
+	if active.rowColors == nil {
+		t.Skip("meaningful only under WMUX_THEME=gradient")
+	}
+	lipgloss.SetColorProfile(termenv.TrueColor) // outside a real TTY lipgloss drops all color by default
+	n := len(active.rowColors)
+	rendered := make([]string, n)
+	for i := 0; i < n; i++ {
+		rendered[i] = rowStyle(i).Render("x")
+	}
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if rendered[i] == rendered[j] {
+				t.Fatalf("rowStyle(%d) == rowStyle(%d), want distinct colors", i, j)
+			}
+		}
+	}
+	if got, want := rowStyle(n).Render("x"), rendered[0]; got != want {
+		t.Fatalf("rowStyle(%d) = %q, want wraparound to rowStyle(0) = %q", n, got, want)
 	}
 }
