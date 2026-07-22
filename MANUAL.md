@@ -39,6 +39,25 @@ use the one that matches what you just found. Don't assume; check.
 
 ## Installation
 
+**Windows, quick path:** run the installer script — no admin rights
+needed. It downloads the latest release (verified against `SHA256SUMS`,
+same as `wmux update --release`), installs to
+`%LOCALAPPDATA%\Programs\wmux`, adds that folder to your user PATH, and
+registers wmuxd to start at logon:
+
+```powershell
+iwr https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.ps1 | iex
+```
+
+Open a **new** terminal afterwards (PATH changes don't reach terminals
+already open), then confirm with `wmux version`. To uninstall:
+`install/uninstall.ps1` (add `-Purge` to also remove `~/.wmux`'s session
+state/logs/settings). See `install/install.ps1 -?` for `-Version`/
+`-InstallDir`/`-NoAutostart` options.
+
+**Manual path** (any OS, or if you'd rather not run a script from the
+internet):
+
 1. Build or grab the binaries — `wmuxd.exe`/`wmux.exe` for native Windows
    use, `bin/linux-amd64/wmuxd`/`wmux` if you also need a WSL-resident
    daemon.
