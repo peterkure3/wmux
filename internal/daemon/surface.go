@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -205,9 +205,9 @@ func (d *Daemon) reapSurface(sess *Session) {
 	sfc.pty.Close()
 	d.markExited(sess)
 	if err != nil {
-		log.Printf("surface %s exited: %v", sess.ID, err)
+		slog.Info("surface exited", "id", sess.ID, "err", err)
 	} else {
-		log.Printf("surface %s exited cleanly", sess.ID)
+		slog.Info("surface exited cleanly", "id", sess.ID)
 	}
 }
 

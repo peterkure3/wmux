@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -60,12 +60,12 @@ func (d *Daemon) save() {
 
 	b, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
-		log.Printf("wmuxd: could not marshal session state: %v", err)
+		slog.Error("could not marshal session state", "err", err)
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(d.statePath), 0o755); err != nil {
-		log.Printf("wmuxd: could not create state directory: %v", err)
+		slog.Error("could not create state directory", "err", err)
 		return
 	}
 
@@ -73,11 +73,11 @@ func (d *Daemon) save() {
 	// mid-write never leaves a truncated/corrupt state file behind.
 	tmp := d.statePath + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		log.Printf("wmuxd: could not write session state: %v", err)
+		slog.Error("could not write session state", "err", err)
 		return
 	}
 	if err := os.Rename(tmp, d.statePath); err != nil {
-		log.Printf("wmuxd: could not finalize session state: %v", err)
+		slog.Error("could not finalize session state", "err", err)
 	}
 }
 
@@ -101,14 +101,14 @@ func (d *Daemon) load() {
 	b, err := os.ReadFile(d.statePath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("wmuxd: could not read session state at %s: %v", d.statePath, err)
+			slog.Error("could not read session state", "path", d.statePath, "err", err)
 		}
 		return
 	}
 
 	var snap []persistedSession
 	if err := json.Unmarshal(b, &snap); err != nil {
-		log.Printf("wmuxd: could not parse session state at %s: %v", d.statePath, err)
+		slog.Error("could not parse session state", "path", d.statePath, "err", err)
 		return
 	}
 
@@ -154,6 +154,6 @@ func (d *Daemon) load() {
 	}
 
 	if restored > 0 {
-		log.Printf("wmuxd: restored %d session(s) from %s", restored, d.statePath)
+		slog.Info("restored sessions", "count", restored, "path", d.statePath)
 	}
 }

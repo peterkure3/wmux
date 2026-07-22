@@ -6,10 +6,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 
 	"github.com/peterkure/wmux/internal/daemon"
 	"github.com/peterkure/wmux/internal/version"
+	"github.com/peterkure/wmux/internal/wmuxlog"
 )
 
 func main() {
@@ -23,8 +25,16 @@ func main() {
 		return
 	}
 
+	closeLog, err := wmuxlog.Init("wmuxd")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmuxd: could not open log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeLog()
+
 	d := daemon.New(*statePath)
 	if err := d.Serve(*addr); err != nil {
-		log.Fatalf("wmuxd: %v", err)
+		slog.Error("wmuxd exiting", "err", err)
+		os.Exit(1)
 	}
 }

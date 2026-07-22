@@ -3,7 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -34,7 +34,7 @@ func (d *Daemon) Serve(addr string) error {
 	})
 	mux.HandleFunc("/shutdown", handleShutdown)
 
-	log.Printf("wmuxd listening on http://%s", addr)
+	slog.Info("wmuxd listening", "addr", addr)
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -48,7 +48,7 @@ func handleShutdown(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	log.Printf("shutdown requested via /shutdown")
+	slog.Info("shutdown requested via /shutdown")
 	// Content-Length lets the client complete its read before os.Exit
 	// tears the socket down — without it the response is delimited by
 	// connection close, which the abrupt exit turns into a reset.

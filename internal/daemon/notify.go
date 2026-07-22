@@ -1,7 +1,7 @@
 package daemon
 
 import (
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -80,7 +80,7 @@ func (d *Daemon) scanNotes(sess *Session, pending []byte) []byte {
 		sess.mu.Unlock()
 
 		d.publishNotify(evt)
-		log.Printf("[notify] session=%s note=%q kind=%q", sess.ID, evt.Display(), kind)
+		slog.Debug("notify", "session", sess.ID, "note", evt.Display(), "kind", kind)
 
 		pending = pending[loc[1]:] // drop everything through the matched sequence
 	}

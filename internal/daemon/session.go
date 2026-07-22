@@ -3,7 +3,7 @@ package daemon
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -377,9 +377,9 @@ func (d *Daemon) waitExit(sess *Session) {
 	err := sess.cmd.Wait()
 	d.markExited(sess)
 	if err != nil {
-		log.Printf("session %s exited: %v", sess.ID, err)
+		slog.Info("session exited", "id", sess.ID, "err", err)
 	} else {
-		log.Printf("session %s exited cleanly", sess.ID)
+		slog.Info("session exited cleanly", "id", sess.ID)
 	}
 }
 
@@ -408,7 +408,7 @@ func (d *Daemon) watchOutput(sess *Session, r io.Reader) {
 		}
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("session %s: read error: %v", sess.ID, err)
+				slog.Warn("session read error", "id", sess.ID, "err", err)
 			}
 			return
 		}
@@ -465,7 +465,7 @@ func (d *Daemon) pollMetadata(sess *Session) {
 			}
 			if !alive {
 				d.markExited(sess)
-				log.Printf("session %s: tracked process %d is gone; marking exited", sess.ID, pid)
+				slog.Info("tracked process gone; marking exited", "id", sess.ID, "pid", pid)
 				return
 			}
 		}

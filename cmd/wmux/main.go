@@ -69,6 +69,8 @@ func main() {
 		cmdSidebarUI(os.Args[2:])
 	case "theme":
 		cmdTheme(os.Args[2:])
+	case "log":
+		cmdLog(os.Args[2:])
 	case "focus":
 		cmdFocus(os.Args[2:])
 	case "close":
@@ -136,6 +138,10 @@ func usage() {
                                           every pane running CMD as its own session
   wmux theme [midnight|frost|gradient]   print the active sidebar theme (no arg), or persist a
                                           new one for the next 'wmux sidebar' launch
+  wmux log [tail [-n N]|level [NAME]|path]
+                                          inspect wmuxd's structured log (default: path + level);
+                                          'level' with no arg prints it, with a name persists it
+                                          for the next wmuxd start
   wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
