@@ -23,10 +23,26 @@ explicitly only if you want a *non-default* distro (check names with
 ```
 cmd/wmuxd/       daemon entrypoint
 cmd/wmux/        CLI entrypoint
-internal/daemon/ session management, OSC watcher, git/port polling, HTTP+SSE server
+internal/daemon/ session management, OSC watcher, git/port polling, HTTP+SSE server, panic recovery
+internal/wmuxlog/ structured logger (log/slog, JSON + rotation) — see docs/logger-design.md
 internal/proto/  shared wire types
 bin/             prebuilt binaries (windows-amd64, linux-amd64)
+install/         Windows installer script (install.ps1/uninstall.ps1)
 ```
+
+## Installing (Windows)
+
+No admin rights needed — installs to `%LOCALAPPDATA%\Programs\wmux`,
+adds it to your user PATH, registers wmuxd to start at logon:
+
+```powershell
+iwr https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.ps1 | iex
+```
+
+Open a **new** terminal afterwards, then `wmux version` to confirm.
+Uninstall with `install/uninstall.ps1` (`-Purge` also removes
+`~/.wmux`'s session state/logs/settings). See MANUAL.md for the manual
+(no-script) install path, e.g. for the WSL-resident Linux build.
 
 ## Running it
 
@@ -134,6 +150,23 @@ release instead — no Go toolchain or checkout needed. Release archives
 are verified against the release's `SHA256SUMS` before install, and a
 machine with no source repo configured falls back to `--release latest`
 automatically.
+
+### Diagnosing wmuxd itself (`wmux log` / `wmux debug`)
+
+`wmux log` inspects the daemon's structured log (`~/.wmux/wmuxd.log`,
+JSON, size-rotated): `wmux log tail [-n N]`, `wmux log level [NAME]`. See
+`docs/logger-design.md`.
+
+`wmux debug` is a runtime inspector for `wmuxd` itself — not a
+source-level debugger (delve already covers that), but the daemon's own
+live state: `wmux debug state` (session table, uptime, goroutine count),
+`wmux debug panics` (every panic a built-in recovery layer has caught —
+before this existed, one panic anywhere in wmuxd took the whole daemon
+down with nothing left to diagnose it), `wmux debug events` (recent
+notify/session history), `wmux debug dump` (bundles all of the above plus
+a log tail into one file — the one to attach to a bug report), and
+`wmux debug pprof cpu|heap|goroutine` (stdlib profiling). See
+`docs/debugger-design.md`.
 
 Under the hood, `wmux pane` files a "pane spec" with the daemon and opens
 the pane on a dedicated `wmux` Windows Terminal profile (installed
@@ -453,3 +486,28 @@ daemon, it's only the hook direction that needs mirrored mode.
    including split halves) and `wmux focus --dir left|right|up|down`
    (relative `wt move-focus`). Both verified end-to-end on real
    Windows 11 + WT 1.24.
+9. ~~**Structured logger**~~ — done: `internal/wmuxlog` replaces scattered
+   `log.Printf` across `internal/daemon` with `log/slog`, JSON to
+   `~/.wmux/wmuxd.log` with size-based rotation, level via
+   `WMUX_LOG_LEVEL` or a persisted `~/.wmux/loglevel` file (same
+   env-then-file resolution as `wmux theme`, for the same reason: a
+   detached/Task-Scheduler wmuxd never inherits an env var set in some
+   other shell). See `docs/logger-design.md`.
+10. ~~**Runtime debugger**~~ — done: closed the daemon's biggest
+    reliability gap found while planning this — zero `recover()` calls
+    existed anywhere, so one panic in any session goroutine or HTTP
+    handler took the whole process down. `safeGo`/`recoverHandler`
+    (`internal/daemon/debug.go`) catch and record panics into a bounded
+    ring buffer instead, exposed via `/debug/state`, `/debug/panics`,
+    `/debug/events/recent`, stdlib pprof under `/debug/pprof/`, and
+    `wmux debug state|panics|events|dump|pprof`. See
+    `docs/debugger-design.md`.
+11. ~~**Windows installer**~~ — done: `install/install.ps1` (no admin
+    needed) downloads the latest GitHub release, installs to
+    `%LOCALAPPDATA%\Programs\wmux`, persists the user PATH, and
+    registers wmuxd autostart — the bootstrap path `wmux update` can't
+    cover (getting `wmux.exe` onto a machine that doesn't have it yet).
+    `install/uninstall.ps1` reverses it. Tested end-to-end against a
+    real published release; caught a real bug doing so (GitHub serves
+    `SHA256SUMS` as `application/octet-stream`, so `Invoke-WebRequest`'s
+    `.Content` came back as a raw byte array instead of a string).
