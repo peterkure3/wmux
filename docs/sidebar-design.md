@@ -131,10 +131,15 @@ wmux-sidebar` is rejected.
 
 ## Dependency
 
-First external dep in go.mod: `github.com/charmbracelet/bubbletea`
-(raw-mode input, resize, mouse tracking, frame repaint — hand-rolling
-those on Windows conhost/WT is weeks of edge cases). Styling is raw ANSI,
-no lipgloss.
+`github.com/charmbracelet/bubbletea` (raw-mode input, resize, mouse
+tracking, frame repaint — hand-rolling those on Windows conhost/WT is
+weeks of edge cases), `bubbles/textinput` for the cwd/cmd prompts,
+`bubbles/key`+`bubbles/help` for the footer, and `lipgloss` for styling.
+The session list body itself stays hand-rolled (`bodyLines`,
+`ensureVisible`): blocks grow 2→3 lines on an unread note, and mouse
+clicks resolve against a line→session `owner[]` map — `bubbles/list`
+assumes uniform per-item height and has no mouse hit-testing, so it
+doesn't fit here.
 
 ## Future / explicitly out of scope for v1
 

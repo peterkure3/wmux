@@ -18,22 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/peterkure/wmux/internal/proto"
 )
 
 const sidebarPoll = 2 * time.Second
-
-// ANSI fragments — raw escapes instead of a styling library; the sidebar's
-// look is a handful of colors, not a layout engine.
-const (
-	aReset   = "\x1b[0m"
-	aDim     = "\x1b[2m"
-	aInverse = "\x1b[7m"
-	aGreen   = "\x1b[32m"
-	aYellow  = "\x1b[33m"
-	aMagenta = "\x1b[35m"
-)
 
 type sidebarMode int
 
@@ -62,9 +53,10 @@ type sidebarModel struct {
 	status   string // transient footer message (last action result)
 
 	mode      sidebarMode
-	pendingID string // session awaiting close confirmation
-	input     string // prompt buffer for modePromptCwd/Cmd
-	newCwd    string // cwd collected by the first prompt step
+	pendingID string          // session awaiting close confirmation
+	ti        textinput.Model // input for modePromptCwd/Cmd
+	newCwd    string          // cwd collected by the first prompt step
+	help      help.Model
 
 	events chan proto.Event
 }
@@ -82,6 +74,8 @@ func cmdSidebarUI(args []string) {
 		unread:   map[string]unreadNote{},
 		daemonOK: true,
 		newCwd:   home,
+		ti:       textinput.New(),
+		help:     newHelpModel(),
 		events:   make(chan proto.Event, 32),
 	}
 	go sseListen(m.events)
@@ -206,6 +200,8 @@ func (m sidebarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.ti.Width = promptWidth(m.width)
+		m.help.Width = m.width - 1 // leading space in the View() footer line
 		m.ensureVisible()
 		return m, nil
 
@@ -256,36 +252,30 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "ctrl+c", "esc":
 			m.mode = modeList
-			m.input = ""
-		case "backspace":
-			if r := []rune(m.input); len(r) > 0 {
-				m.input = string(r[:len(r)-1])
-			}
+			m.ti.Blur()
+			return m, nil
 		case "enter":
-			val := strings.TrimSpace(m.input)
+			val := strings.TrimSpace(m.ti.Value())
 			if m.mode == modePromptCwd {
 				if val == "" {
 					val = m.newCwd
 				}
 				m.newCwd = val
 				m.mode = modePromptCmd
-				m.input = ""
-			} else {
-				m.mode = modeList
-				m.input = ""
-				if val != "" {
-					return m, openPaneCmd(m.newCwd, val, m.sessions)
-				}
+				m.ti.Prompt = " cmd> "
+				m.ti.SetValue("")
+				return m, nil
 			}
-		default:
-			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-				m.input += string(msg.Runes)
-				if msg.Type == tea.KeySpace {
-					m.input += " "
-				}
+			m.mode = modeList
+			m.ti.Blur()
+			if val != "" {
+				return m, openPaneCmd(m.newCwd, val, m.sessions)
 			}
+			return m, nil
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.ti, cmd = m.ti.Update(msg)
+		return m, cmd
 	}
 
 	if m.mode == modeConfirmClose {
@@ -327,7 +317,11 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		m.mode = modePromptCwd
-		m.input = m.newCwd
+		m.ti.Prompt = " cwd> "
+		m.ti.Width = promptWidth(m.width)
+		m.ti.SetValue(m.newCwd)
+		m.ti.CursorEnd()
+		return m, m.ti.Focus()
 	case "r":
 		m.status = ""
 		return m, fetchSessionsCmd
@@ -397,182 +391,4 @@ func (m *sidebarModel) setSessions(ss []proto.SessionInfo) {
 		}
 	}
 	m.ensureVisible()
-}
-
-// bodyHeight is the line budget for session blocks given the fixed chrome:
-// header + separator above, separator + summary + context + help below.
-func (m sidebarModel) bodyHeight() int {
-	h := m.height
-	if h == 0 {
-		h = 24
-	}
-	if b := h - 6; b > 0 {
-		return b
-	}
-	return 1
-}
-
-// ensureVisible adjusts scroll so the selected session's whole block fits
-// in the body. Blocks are 2 or 3 lines (3 with an unread note), so this
-// walks real heights instead of assuming a fixed row size.
-func (m *sidebarModel) ensureVisible() {
-	if m.selected < m.scroll {
-		m.scroll = m.selected
-		return
-	}
-	avail := m.bodyHeight()
-	for m.scroll < m.selected {
-		used := 0
-		for i := m.scroll; i <= m.selected; i++ {
-			used += m.blockHeight(i)
-		}
-		if used <= avail {
-			break
-		}
-		m.scroll++
-	}
-}
-
-func (m sidebarModel) blockHeight(i int) int {
-	if _, ok := m.unread[m.sessions[i].ID]; ok {
-		return 3
-	}
-	return 2
-}
-
-func (m sidebarModel) View() string {
-	w := m.width
-	if w == 0 {
-		w = 30
-	}
-	sep := aDim + strings.Repeat("─", w) + aReset
-
-	var b strings.Builder
-	b.WriteString(padTrunc(" wmux", w) + "\n" + sep + "\n")
-
-	lines, _ := m.bodyLines()
-	for _, l := range lines {
-		b.WriteString(l + "\n")
-	}
-	for i := len(lines); i < m.bodyHeight(); i++ {
-		b.WriteString("\n")
-	}
-
-	b.WriteString(sep + "\n")
-	summary := fmt.Sprintf(" %d sessions · %d unread", len(m.sessions), len(m.unread))
-	if !m.daemonOK {
-		summary += " · " + aYellow + "wmuxd offline" + aReset
-	}
-	b.WriteString(padTrunc(summary, w) + "\n")
-
-	// Context line: active prompt/confirmation, else last action result.
-	switch m.mode {
-	case modeConfirmClose:
-		b.WriteString(aInverse + padTrunc(fmt.Sprintf(" close %s? y/n", m.pendingID), w) + aReset + "\n")
-	case modePromptCwd:
-		b.WriteString(aInverse + padTrunc(" cwd> "+m.input+"▌", w) + aReset + "\n")
-	case modePromptCmd:
-		b.WriteString(aInverse + padTrunc(" cmd> "+m.input+"▌", w) + aReset + "\n")
-	default:
-		b.WriteString(aDim + padTrunc(" "+m.status, w) + aReset + "\n")
-	}
-
-	b.WriteString(aDim + padTrunc(" ⏎ focus  x close  n new  q quit", w) + aReset)
-	return b.String()
-}
-
-// bodyLines renders the visible session blocks and, in parallel, which
-// session owns each screen line — the same mapping mouse clicks resolve
-// against, so render and hit-testing can never disagree.
-func (m sidebarModel) bodyLines() (lines []string, owner []int) {
-	w := m.width
-	if w == 0 {
-		w = 30
-	}
-	avail := m.bodyHeight()
-
-	for i := m.scroll; i < len(m.sessions) && len(lines) < avail; i++ {
-		s := m.sessions[i]
-		note, hasNote := m.unread[s.ID]
-
-		marker := "  "
-		if i == m.selected {
-			marker = "▸ "
-		}
-		dot, dotColor := "●", aGreen
-		if !s.Running {
-			dot, dotColor = "○", aDim
-		}
-		tag := ""
-		if !s.Native {
-			tag = " wsl"
-		}
-
-		line1 := padTrunc(fmt.Sprintf("%s%s %s  %s%s", marker, dot, s.ID, s.Branch, tag), w)
-		// Inverse the whole selected row; otherwise color just the dot.
-		if i == m.selected {
-			line1 = aInverse + line1 + aReset
-		} else {
-			line1 = strings.Replace(line1, dot, dotColor+dot+aReset, 1)
-		}
-		lines = append(lines, line1)
-		owner = append(owner, i)
-
-		ports := ""
-		for _, p := range s.Ports {
-			ports += fmt.Sprintf(" :%d", p)
-		}
-		lines = append(lines, aDim+padTrunc("    "+leftTrunc(s.Cwd, w-8-len(ports))+ports, w)+aReset)
-		owner = append(owner, i)
-
-		if hasNote && len(lines) < avail {
-			age := shortAge(time.Since(note.at))
-			body := strings.ReplaceAll(note.body, "\n", " ")
-			lines = append(lines, aMagenta+padTrunc(fmt.Sprintf("    ✉ %s  %s", body, age), w)+aReset)
-			owner = append(owner, i)
-		}
-	}
-	return lines, owner
-}
-
-// padTrunc right-pads or truncates a plain (ANSI-free) string to exactly
-// w columns, counting runes — good enough for the sidebar's ASCII-heavy
-// content without pulling in a display-width library.
-func padTrunc(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) > w {
-		if w == 1 {
-			return "…"
-		}
-		return string(r[:w-1]) + "…"
-	}
-	return s + strings.Repeat(" ", w-len(r))
-}
-
-// leftTrunc keeps the tail of a path-like string, which is the useful end.
-func leftTrunc(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= w {
-		return s
-	}
-	return "…" + string(r[len(r)-w+1:])
-}
-
-func shortAge(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return "<1m"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
 }
