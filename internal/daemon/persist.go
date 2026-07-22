@@ -150,7 +150,7 @@ func (d *Daemon) load() {
 	// d.mu directly, but holding d.mu across goroutine starts is needless
 	// scope creep.
 	for _, sess := range toPoll {
-		go d.pollMetadata(sess)
+		d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
 	}
 
 	if restored > 0 {

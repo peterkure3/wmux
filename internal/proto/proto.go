@@ -188,3 +188,26 @@ type SurfaceResizeRequest struct {
 	Cols int    `json:"cols"`
 	Rows int    `json:"rows"`
 }
+
+// DebugState is the response for GET /debug/state — a snapshot of the
+// daemon's own runtime health, for `wmux debug state` and bug reports.
+type DebugState struct {
+	Version      string        `json:"version"`
+	StartedAt    time.Time     `json:"startedAt"`
+	Uptime       string        `json:"uptime"`
+	NumGoroutine int           `json:"numGoroutine"`
+	NumSessions  int           `json:"numSessions"`
+	Sessions     []SessionInfo `json:"sessions"`
+}
+
+// PanicEntry is one recovered panic, kept in a bounded in-memory ring
+// buffer (internal/daemon's recoverHandler/safeGo) and exposed at
+// GET /debug/panics — the daemon has no other panic-recovery mechanism, so
+// this is the only record of a goroutine or handler that would otherwise
+// have silently taken wmuxd down.
+type PanicEntry struct {
+	Time   time.Time `json:"time"`
+	Source string    `json:"source"` // handler pattern or goroutine name where it was recovered
+	Err    string    `json:"err"`
+	Stack  string    `json:"stack"`
+}

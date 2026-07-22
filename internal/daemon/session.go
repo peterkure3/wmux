@@ -65,15 +65,22 @@ type Daemon struct {
 	// statePath is where sessions are persisted between restarts; empty
 	// disables persistence entirely.
 	statePath string
+
+	startedAt    time.Time
+	panics       *ring[proto.PanicEntry]
+	recentEvents *ring[proto.Event]
 }
 
 // New creates a daemon and restores any sessions found at statePath from a
 // previous run (see load). Pass an empty statePath to disable persistence.
 func New(statePath string) *Daemon {
 	d := &Daemon{
-		sessions:  make(map[string]*Session),
-		subs:      make(map[chan proto.Event]*int),
-		statePath: statePath,
+		sessions:     make(map[string]*Session),
+		subs:         make(map[chan proto.Event]*int),
+		statePath:    statePath,
+		startedAt:    time.Now(),
+		panics:       newRing[proto.PanicEntry](50),
+		recentEvents: newRing[proto.Event](200),
 	}
 	d.load()
 	return d
@@ -113,6 +120,7 @@ func stampDropped(evt proto.Event, dropped int) proto.Event {
 // accounted for: the next notify it receives carries Dropped = how many
 // notifies were evicted since the last one it saw.
 func (d *Daemon) publish(evt proto.Event) {
+	d.recentEvents.add(evt)
 	isNotify := evt.Type == proto.EventNotify && evt.Notify != nil
 	d.subMu.Lock()
 	defer d.subMu.Unlock()
@@ -240,7 +248,7 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 	d.sessions[id] = sess
 	d.mu.Unlock()
 
-	go d.pollMetadata(sess)
+	d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
 	d.save()
 	d.publishSessions()
 
@@ -364,9 +372,9 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	d.sessions[req.ID] = sess
 	d.mu.Unlock()
 
-	go d.watchOutput(sess, stdout)
-	go d.pollMetadata(sess)
-	go d.waitExit(sess)
+	d.safeGo("watchOutput:"+sess.ID, func() { d.watchOutput(sess, stdout) })
+	d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
+	d.safeGo("waitExit:"+sess.ID, func() { d.waitExit(sess) })
 	d.save()
 	d.publishSessions()
 

@@ -98,9 +98,9 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	d.sessions[req.ID] = sess
 	d.mu.Unlock()
 
-	go d.readSurface(sess)
-	go d.reapSurface(sess)
-	go d.pollMetadata(sess)
+	d.safeGo("readSurface:"+sess.ID, func() { d.readSurface(sess) })
+	d.safeGo("reapSurface:"+sess.ID, func() { d.reapSurface(sess) })
+	d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
 	d.save()
 	d.publishSessions()
 

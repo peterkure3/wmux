@@ -16,23 +16,31 @@ import (
 func (d *Daemon) Serve(addr string) error {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/sessions", d.handleSessions)
-	mux.HandleFunc("/sessions/register", d.handleRegister)
-	mux.HandleFunc("/sessions/deregister", d.handleDeregister)
-	mux.HandleFunc("/sessions/close", d.handleClose)
-	mux.HandleFunc("/sessions/prune", d.handlePrune)
-	mux.HandleFunc("/surfaces", d.handleSurfaces)
-	mux.HandleFunc("/surfaces/attach", d.handleSurfaceAttach)
-	mux.HandleFunc("/surfaces/input", d.handleSurfaceInput)
-	mux.HandleFunc("/surfaces/resize", d.handleSurfaceResize)
-	mux.HandleFunc("/panes/pending", d.handlePanePending)
-	mux.HandleFunc("/panes/claim", d.handlePaneClaim)
-	mux.HandleFunc("/notify", d.handleNotify)
-	mux.HandleFunc("/events", d.handleEvents)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	route := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, d.recoverHandler(pattern, h))
+	}
+
+	route("/sessions", d.handleSessions)
+	route("/sessions/register", d.handleRegister)
+	route("/sessions/deregister", d.handleDeregister)
+	route("/sessions/close", d.handleClose)
+	route("/sessions/prune", d.handlePrune)
+	route("/surfaces", d.handleSurfaces)
+	route("/surfaces/attach", d.handleSurfaceAttach)
+	route("/surfaces/input", d.handleSurfaceInput)
+	route("/surfaces/resize", d.handleSurfaceResize)
+	route("/panes/pending", d.handlePanePending)
+	route("/panes/claim", d.handlePaneClaim)
+	route("/notify", d.handleNotify)
+	route("/events", d.handleEvents)
+	route("/debug/state", d.handleDebugState)
+	route("/debug/panics", d.handleDebugPanics)
+	route("/debug/events/recent", d.handleDebugEvents)
+	route("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/shutdown", handleShutdown)
+	route("/shutdown", handleShutdown)
+	registerPprof(mux) // stdlib handlers, not wrapped by recoverHandler — they're diagnostic tools in their own right
 
 	slog.Info("wmuxd listening", "addr", addr)
 	return http.ListenAndServe(addr, mux)

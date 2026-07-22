@@ -71,6 +71,8 @@ func main() {
 		cmdTheme(os.Args[2:])
 	case "log":
 		cmdLog(os.Args[2:])
+	case "debug":
+		cmdDebug(os.Args[2:])
 	case "focus":
 		cmdFocus(os.Args[2:])
 	case "close":
@@ -142,6 +144,10 @@ func usage() {
                                           inspect wmuxd's structured log (default: path + level);
                                           'level' with no arg prints it, with a name persists it
                                           for the next wmuxd start
+  wmux debug state|panics|events|dump|pprof [cpu|heap|goroutine [seconds]]
+                                          inspect wmuxd's own runtime state — session table,
+                                          recovered panics, recent events, a bug-report bundle
+                                          ('dump'), or a pprof profile written to disk
   wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
   wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
