@@ -46,7 +46,7 @@ func TestRingEmptySnapshotNotNil(t *testing.T) {
 // does not propagate to the test (which would otherwise crash `go test`
 // itself).
 func TestSafeGoRecoversPanic(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	d.safeGo("test-source", func() {
@@ -75,7 +75,7 @@ func TestSafeGoRecoversPanic(t *testing.T) {
 }
 
 func TestRecoverHandlerReturns500AndRecordsPanic(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	h := d.recoverHandler("/test/panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("handler exploded")
 	})
@@ -97,7 +97,7 @@ func TestRecoverHandlerReturns500AndRecordsPanic(t *testing.T) {
 }
 
 func TestHandleDebugState(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	req := httptest.NewRequest(http.MethodGet, "/debug/state", nil)
 	rec := httptest.NewRecorder()
 	d.handleDebugState(rec, req)
@@ -115,7 +115,7 @@ func TestHandleDebugState(t *testing.T) {
 }
 
 func TestPublishFeedsRecentEventsRing(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	d.publishNotify(proto.NotifyEvent{SessionID: "s1", Body: "hi"})
 
 	events := d.recentEvents.snapshot()

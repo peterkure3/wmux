@@ -32,7 +32,7 @@ type feed struct {
 
 func newFeed(t *testing.T) (*feed, chan struct{}) {
 	t.Helper()
-	d := New("") // no persistence
+	d := New("", "") // no persistence, no auth
 	sess := &Session{ID: "stress"}
 	d.mu.Lock()
 	d.sessions[sess.ID] = sess
@@ -155,7 +155,7 @@ func TestScanNotesBurst(t *testing.T) {
 // channel must end up holding the NEWEST events, and Dropped fields must
 // account for every evicted notify.
 func TestPublishDropOldest(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	sub := d.Subscribe()
 	cap := cap(sub)
 	n := cap + 44
@@ -254,7 +254,7 @@ func TestScanNotesHugeUnterminated(t *testing.T) {
 // TestScanNotesConcurrentSessions runs scanNotes for many sessions in
 // parallel against one daemon — meant for -race.
 func TestScanNotesConcurrentSessions(t *testing.T) {
-	d := New("")
+	d := New("", "")
 	sub := d.Subscribe()
 	defer d.Unsubscribe(sub)
 	go func() {

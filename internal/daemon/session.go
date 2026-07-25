@@ -66,18 +66,26 @@ type Daemon struct {
 	// disables persistence entirely.
 	statePath string
 
+	// token authenticates every request to the HTTP API except /healthz
+	// (see auth.go). Empty disables authentication entirely — for tests
+	// only; the daemon binary always provisions one.
+	token string
+
 	startedAt    time.Time
 	panics       *ring[proto.PanicEntry]
 	recentEvents *ring[proto.Event]
 }
 
 // New creates a daemon and restores any sessions found at statePath from a
-// previous run (see load). Pass an empty statePath to disable persistence.
-func New(statePath string) *Daemon {
+// previous run (see load). Pass an empty statePath to disable persistence,
+// and an empty token to disable API authentication (tests only — the API
+// can execute arbitrary commands, so the daemon binary always supplies one).
+func New(statePath, token string) *Daemon {
 	d := &Daemon{
 		sessions:     make(map[string]*Session),
 		subs:         make(map[chan proto.Event]*int),
 		statePath:    statePath,
+		token:        token,
 		startedAt:    time.Now(),
 		panics:       newRing[proto.PanicEntry](50),
 		recentEvents: newRing[proto.Event](200),

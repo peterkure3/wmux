@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/peterkure3/wmux/internal/authtoken"
 	"github.com/peterkure3/wmux/internal/daemon"
 	"github.com/peterkure3/wmux/internal/version"
 	"github.com/peterkure3/wmux/internal/wmuxlog"
@@ -32,7 +33,15 @@ func main() {
 	}
 	defer closeLog()
 
-	d := daemon.New(*statePath)
+	// Provisioned before Serve so the API is never reachable unauthenticated,
+	// not even for the moment between listen and first request.
+	token, err := authtoken.LoadOrCreate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wmuxd: %v\n", err)
+		os.Exit(1)
+	}
+
+	d := daemon.New(*statePath, token)
 	if err := d.Serve(*addr); err != nil {
 		slog.Error("wmuxd exiting", "err", err)
 		os.Exit(1)

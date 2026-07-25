@@ -123,10 +123,14 @@ func (d *Daemon) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
 // /debug/pprof/ on d's own mux — pprof's functions default to registering
 // on http.DefaultServeMux via import side effect, which doesn't reach a
 // custom mux, so each entry point needs an explicit registration here.
-func registerPprof(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+//
+// guard is applied to each: /debug/pprof/cmdline discloses this process's
+// full argv, and /debug/pprof/profile burns 30s of CPU per request, so
+// these are not safe to leave open on a port any local process can reach.
+func registerPprof(mux *http.ServeMux, guard func(http.HandlerFunc) http.HandlerFunc) {
+	mux.HandleFunc("/debug/pprof/", guard(pprof.Index))
+	mux.HandleFunc("/debug/pprof/cmdline", guard(pprof.Cmdline))
+	mux.HandleFunc("/debug/pprof/profile", guard(pprof.Profile))
+	mux.HandleFunc("/debug/pprof/symbol", guard(pprof.Symbol))
+	mux.HandleFunc("/debug/pprof/trace", guard(pprof.Trace))
 }

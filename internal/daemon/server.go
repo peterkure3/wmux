@@ -11,39 +11,80 @@ import (
 	"github.com/peterkure3/wmux/internal/proto"
 )
 
-// Serve starts the local HTTP API. Bound to 127.0.0.1 only — this is a
-// single-machine daemon, not a network service.
-func (d *Daemon) Serve(addr string) error {
-	mux := http.NewServeMux()
+// authHeader is the request header carrying the shared token. Kept as a
+// local const so package daemon doesn't import the CLI-facing authtoken
+// package just for a string.
+const authHeader = "X-Wmux-Token"
 
-	route := func(pattern string, h http.HandlerFunc) {
-		mux.HandleFunc(pattern, d.recoverHandler(pattern, h))
+// Serve starts the local HTTP API.
+//
+// Bound to 127.0.0.1, but note that loopback is NOT a trust boundary: any
+// local process can reach it, and so can any web page the user visits
+// (a cross-origin POST with a simple Content-Type needs no preflight, and
+// the handlers below decode the body regardless of Content-Type). Since
+// POST /sessions executes its Command field, every route except /healthz
+// goes through d.guard — see auth.go.
+func (d *Daemon) Serve(addr string) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           d.handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout is deliberately 0: /events (SSE) and
+		// /surfaces/attach (NDJSON) are long-lived streams that a write
+		// deadline would sever mid-session. The read-side timeouts above
+		// still bound a client that opens a connection and then stalls.
 	}
 
-	route("/sessions", d.handleSessions)
-	route("/sessions/register", d.handleRegister)
-	route("/sessions/deregister", d.handleDeregister)
-	route("/sessions/close", d.handleClose)
-	route("/sessions/prune", d.handlePrune)
-	route("/surfaces", d.handleSurfaces)
-	route("/surfaces/attach", d.handleSurfaceAttach)
-	route("/surfaces/input", d.handleSurfaceInput)
-	route("/surfaces/resize", d.handleSurfaceResize)
-	route("/panes/pending", d.handlePanePending)
-	route("/panes/claim", d.handlePaneClaim)
-	route("/notify", d.handleNotify)
-	route("/events", d.handleEvents)
-	route("/debug/state", d.handleDebugState)
-	route("/debug/panics", d.handleDebugPanics)
-	route("/debug/events/recent", d.handleDebugEvents)
-	route("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	slog.Info("wmuxd listening", "addr", addr)
+	return srv.ListenAndServe()
+}
+
+// handler builds the API's routing table. Separate from Serve so tests can
+// exercise the real mux — in particular, that every route is behind guard.
+func (d *Daemon) handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// Method patterns (Go 1.22+) mean each handler no longer has to
+	// reject the wrong verb itself; the mux answers 405 on its own.
+	route := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, d.recoverHandler(pattern, d.guard(h)))
+	}
+
+	route("GET /sessions", d.handleListSessions)
+	route("POST /sessions", d.handleSpawnSession)
+	route("POST /sessions/register", d.handleRegister)
+	route("POST /sessions/deregister", d.handleDeregister)
+	route("POST /sessions/close", d.handleClose)
+	route("POST /sessions/prune", d.handlePrune)
+	route("POST /surfaces", d.handleSurfaces)
+	route("GET /surfaces/attach", d.handleSurfaceAttach)
+	route("POST /surfaces/input", d.handleSurfaceInput)
+	route("POST /surfaces/resize", d.handleSurfaceResize)
+	route("POST /panes/pending", d.handlePanePending)
+	route("POST /panes/claim", d.handlePaneClaim)
+	route("POST /notify", d.handleNotify)
+	route("GET /events", d.handleEvents)
+	route("GET /debug/state", d.handleDebugState)
+	route("GET /debug/panics", d.handleDebugPanics)
+	route("GET /debug/events/recent", d.handleDebugEvents)
+	route("POST /shutdown", handleShutdown)
+
+	// pprof is guarded too: /debug/pprof/cmdline leaks this process's argv
+	// and /debug/pprof/profile is a free 30-second CPU burn for anyone who
+	// can reach it. Not wrapped by recoverHandler — they're diagnostic
+	// tools in their own right.
+	registerPprof(mux, d.guard)
+
+	// /healthz is the sole exemption: it returns no data and mutates
+	// nothing, and `wmux update` depends on probing it across a version
+	// skew where the CLI may not have a token yet.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	route("/shutdown", handleShutdown)
-	registerPprof(mux) // stdlib handlers, not wrapped by recoverHandler — they're diagnostic tools in their own right
 
-	slog.Info("wmuxd listening", "addr", addr)
-	return http.ListenAndServe(addr, mux)
+	return mux
 }
 
 // handleShutdown exits the daemon cleanly on request — `wmux update` uses
@@ -52,10 +93,6 @@ func (d *Daemon) Serve(addr string) error {
 // http.Server.Shutdown is deliberately not used because /events SSE
 // subscribers hold their connections open indefinitely.
 func handleShutdown(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	slog.Info("shutdown requested via /shutdown")
 	// Content-Length lets the client complete its read before os.Exit
 	// tears the socket down — without it the response is delimited by
@@ -73,36 +110,27 @@ func handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (d *Daemon) handleSessions(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		json.NewEncoder(w).Encode(d.List())
+func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(d.List())
+}
 
-	case http.MethodPost:
-		var req proto.NewSessionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		sess, err := d.Spawn(req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		json.NewEncoder(w).Encode(sess.Info())
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (d *Daemon) handleSpawnSession(w http.ResponseWriter, r *http.Request) {
+	var req proto.NewSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	sess, err := d.Spawn(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	json.NewEncoder(w).Encode(sess.Info())
 }
 
 // handleRegister lets `wmux attach` register a session it owns the TTY
 // for, without the daemon spawning or piping the process itself.
 func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.RegisterSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -119,10 +147,6 @@ func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 // handleDeregister marks an attach-mode session as no longer running,
 // called by `wmux attach` right before it exits.
 func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.DeregisterSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -137,10 +161,6 @@ func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
 
 // handleClose kills a session's tracked process — called by `wmux close`.
 func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.CloseSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -156,20 +176,12 @@ func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 // handlePrune removes all exited sessions from daemon state — called by
 // `wmux prune`.
 func (d *Daemon) handlePrune(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	json.NewEncoder(w).Encode(proto.PruneResult{Removed: d.Prune()})
 }
 
 // handlePanePending files a pane spec from `wmux pane`, to be claimed by
 // the `wmux pane-exec` process that starts inside the new wt.exe pane.
 func (d *Daemon) handlePanePending(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var spec proto.PaneSpec
 	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -185,10 +197,6 @@ func (d *Daemon) handlePanePending(w http.ResponseWriter, r *http.Request) {
 
 // handlePaneClaim hands a pending pane spec to the pane that will run it.
 func (d *Daemon) handlePaneClaim(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.ClaimPaneRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -207,10 +215,6 @@ func (d *Daemon) handlePaneClaim(w http.ResponseWriter, r *http.Request) {
 // hooks that can't easily write to the session's own PTY (e.g. a hook
 // script running in a different process than the shell wmuxd is tailing).
 func (d *Daemon) handleNotify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var evt proto.NotifyEvent
 	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -271,10 +275,6 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 // agent runs inside, attachable/detachable like a tmux session. Called by
 // `wmux surface`.
 func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.NewSurfaceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -293,10 +293,6 @@ func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
 // output frames, with a fresh replay after any resize and an exit frame
 // when the process ends. Called by `wmux connect`.
 func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -334,10 +330,6 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 
 // handleSurfaceInput writes client keystrokes to a surface's pty.
 func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.SurfaceInputRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -353,10 +345,6 @@ func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
 // handleSurfaceResize resizes a surface's pty + screen model; every
 // attached client then receives a fresh replay at the new size.
 func (d *Daemon) handleSurfaceResize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req proto.SurfaceResizeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

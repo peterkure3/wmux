@@ -30,6 +30,35 @@ bin/             prebuilt binaries (windows-amd64, linux-amd64)
 install/         Windows installer script (install.ps1/uninstall.ps1)
 ```
 
+## Authentication
+
+wmuxd's HTTP API can execute arbitrary commands (`POST /sessions` runs its
+`command` field), so binding to `127.0.0.1` is not on its own sufficient —
+loopback is reachable by every process on the machine, and by any web page
+you visit, since a cross-origin POST with a simple `Content-Type` is sent
+without a CORS preflight.
+
+Two mechanisms close that:
+
+- **Browser rejection.** Any request carrying `Origin` or a cross-site
+  `Sec-Fetch-Site` is refused with 403. Those headers are set by the
+  browser and cannot be forged by page JavaScript.
+- **A shared token.** `wmuxd` generates `~/.wmux/token` (0600) on first
+  start; `wmux` reads it and sends it as `X-Wmux-Token`. Every route except
+  `GET /healthz` requires it, including `/shutdown` and `/debug/pprof/*`.
+
+Nothing to configure — both binaries find the file on their own. Two notes:
+
+- If you talk to the API by hand, send the header:
+  `curl -H "X-Wmux-Token: $(cat ~/.wmux/token)" http://127.0.0.1:47823/sessions`
+- Set `WMUX_TOKEN_FILE` alongside `WMUX_ADDR` when running isolated
+  daemons on one machine.
+
+**Upgrading from a pre-token build:** restart `wmuxd` so it provisions the
+token. Panes still running the previous `wmux.exe` will get a 401 on their
+deregister call and print a warning — harmless, and it goes away when the
+pane is reopened.
+
 ## Installing (Windows)
 
 No admin rights needed — installs to `%LOCALAPPDATA%\Programs\wmux`,
