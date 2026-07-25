@@ -21,9 +21,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// feed pushes data through scanNotes the way watchOutput does — appending
-// chunks to a pending buffer and applying the same maxPending trim — and
-// collects every published event.
+// feed pushes data through scanNotes exactly the way watchOutput does —
+// appending chunks to a pending buffer and applying the production
+// trimPending — and collects every published event.
 type feed struct {
 	d       *Daemon
 	sess    *Session
@@ -41,12 +41,8 @@ func newFeed(t *testing.T) (*feed, chan struct{}) {
 }
 
 func (f *feed) write(chunk []byte) {
-	const maxPending = 16 * 1024
 	f.pending = append(f.pending, chunk...)
-	f.pending = f.d.scanNotes(f.sess, f.pending)
-	if len(f.pending) > maxPending {
-		f.pending = f.pending[len(f.pending)-maxPending:]
-	}
+	f.pending = trimPending(f.d.scanNotes(f.sess, f.pending))
 }
 
 func (f *feed) lastNote() string {

@@ -150,7 +150,6 @@ func resolveExe(name string) string {
 // so reapSurface closing the pty is what actually unblocks this.
 func (d *Daemon) readSurface(sess *Session) {
 	sfc := sess.sfc
-	const maxPending = 16 * 1024
 	buf := make([]byte, 8192)
 	var pending []byte
 
@@ -174,10 +173,7 @@ func (d *Daemon) readSurface(sess *Session) {
 			// watchOutput (see its comment for why this is byte-, not
 			// line-, oriented).
 			pending = append(pending, chunk...)
-			pending = d.scanNotes(sess, pending)
-			if len(pending) > maxPending {
-				pending = pending[len(pending)-maxPending:]
-			}
+			pending = trimPending(d.scanNotes(sess, pending))
 		}
 		if err != nil {
 			return

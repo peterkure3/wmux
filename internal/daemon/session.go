@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -423,7 +424,6 @@ func (d *Daemon) waitExit(sess *Session) {
 // buffering here would delay detection until the next newline — which,
 // in the worst case, is whenever the session happens to exit.
 func (d *Daemon) watchOutput(sess *Session, r io.Reader) {
-	const maxPending = 16 * 1024
 	buf := make([]byte, 4096)
 	var pending []byte
 
@@ -431,14 +431,7 @@ func (d *Daemon) watchOutput(sess *Session, r io.Reader) {
 		n, err := r.Read(buf)
 		if n > 0 {
 			pending = append(pending, buf[:n]...)
-			pending = d.scanNotes(sess, pending)
-
-			// Cap growth for chatty agents that never emit a notify sequence;
-			// keep only the tail, since a partial match can only ever start
-			// within the last few bytes read.
-			if len(pending) > maxPending {
-				pending = pending[len(pending)-maxPending:]
-			}
+			pending = trimPending(d.scanNotes(sess, pending))
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -516,7 +509,7 @@ func (d *Daemon) pollMetadata(sess *Session) {
 			sess.mu.Unlock()
 			return
 		}
-		changed := branch != sess.branch || !equalInts(ports, sess.ports)
+		changed := branch != sess.branch || !slices.Equal(ports, sess.ports)
 		sess.branch = branch
 		sess.ports = ports
 		sess.mu.Unlock()
@@ -528,18 +521,6 @@ func (d *Daemon) pollMetadata(sess *Session) {
 			d.publishSessions()
 		}
 	}
-}
-
-func equalInts(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // pidVisible reports whether a session's tracked PID lives in the

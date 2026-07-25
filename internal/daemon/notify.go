@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -13,6 +14,43 @@ import (
 // and OSC 777 (rxvt-style notify), capturing the code and body separately.
 // All three are terminated by BEL (\x07) or ST (\x1b\\).
 var oscNotifyRe = regexp.MustCompile(`\x1b\](9|99|777);([^\x07\x1b]*)(?:\x07|\x1b\\)`)
+
+// maxPending caps the notify-scan buffer. A partial OSC sequence longer
+// than this is not a notification anyone meant to send, so it is dropped
+// rather than allowed to grow without bound on a binary output stream.
+const maxPending = 16 * 1024
+
+// trimPending discards the part of a notify-scan buffer that can no
+// longer contribute to a match.
+//
+// An incomplete match can only begin at the LAST "\x1b]" (OSC introducer)
+// in the buffer — everything before it has already been scanned and ruled
+// out. Note this is not simply the last ESC byte: an ST-terminated match
+// (\x1b\\) contains a second ESC in its own terminator, so pivoting on the
+// last bare ESC would cut a still-completing match in half the instant its
+// terminator's opening byte arrived. Without this trim, a chatty agent
+// that never emits a notify makes every read re-scan a growing buffer;
+// with it the buffer is empty on essentially every iteration.
+func trimPending(pending []byte) []byte {
+	if i := bytes.LastIndex(pending, []byte{0x1b, ']'}); i >= 0 {
+		if len(pending)-i > maxPending {
+			return nil
+		}
+		if i == 0 {
+			return pending
+		}
+		// Copy the surviving tail into a fresh slice rather than
+		// resliceing, so the discarded head's backing array can be
+		// collected instead of being pinned by a few live bytes.
+		return append([]byte(nil), pending[i:]...)
+	}
+	// No OSC introducer at all. A trailing lone ESC might still become one
+	// once the next byte arrives — keep it; anything else is dead weight.
+	if n := len(pending); n > 0 && pending[n-1] == 0x1b {
+		return append([]byte(nil), pending[n-1:]...)
+	}
+	return nil
+}
 
 // parseNote turns a matched OSC notify sequence into structured fields.
 // OSC 9 carries a bare message. OSC 99 carries key=value pairs
