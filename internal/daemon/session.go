@@ -319,6 +319,7 @@ func (d *Daemon) Close(id string) error {
 	sess.mu.Lock()
 	pid := sess.pid
 	running := sess.running
+	native := sess.native
 	sess.mu.Unlock()
 
 	if !running {
@@ -326,6 +327,23 @@ func (d *Daemon) Close(id string) error {
 	}
 	if pid == 0 {
 		return fmt.Errorf("session %q has no tracked process to close", id)
+	}
+
+	// A WSL-registered session's PID lives inside the distro's own PID
+	// namespace, where it means nothing to this side's process table.
+	// os.FindProcess always succeeds on Windows and Kill is a raw
+	// OpenProcess(PROCESS_TERMINATE), so killing such a PID locally
+	// terminates whatever unrelated Windows process happens to hold that
+	// number. pollMetadata already respects this boundary via pidVisible;
+	// so must this. Kill it inside the distro instead.
+	if !pidVisible(native, sess.Command) {
+		args := append(wslArgs(sess.Distro), "--exec", "kill", "-TERM", strconv.Itoa(pid))
+		if out, err := hiddenCommand("wsl.exe", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("could not kill pid %d inside WSL distro %q: %w: %s",
+				pid, sess.Distro, err, strings.TrimSpace(string(out)))
+		}
+		d.markExited(sess)
+		return nil
 	}
 
 	proc, err := os.FindProcess(pid)
