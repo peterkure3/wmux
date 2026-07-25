@@ -153,7 +153,7 @@ func defaultPaneID(cwd string) string {
 // the sidebar TUI's n action.
 func filePaneSpec(spec proto.PaneSpec) error {
 	b, _ := json.Marshal(spec)
-	resp, err := http.Post(daemonAddr+"/panes/pending", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/panes/pending", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("could not reach wmuxd (is it running?): %v", err)
 	}

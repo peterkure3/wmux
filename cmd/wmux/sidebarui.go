@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,7 +92,7 @@ func cmdSidebarUI(args []string) {
 // "wmuxd offline" indicator).
 func sseListen(ch chan<- proto.Event) {
 	for {
-		resp, err := http.Get(daemonAddr + "/events")
+		resp, err := daemonStream("/events")
 		if err == nil {
 			scanner := bufio.NewScanner(resp.Body)
 			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -121,7 +120,7 @@ func sidebarTick() tea.Cmd {
 }
 
 func fetchSessionsCmd() tea.Msg {
-	resp, err := http.Get(daemonAddr + "/sessions")
+	resp, err := daemonGet("/sessions")
 	if err != nil {
 		return daemonDownMsg{}
 	}

@@ -198,15 +198,14 @@ func pushNotifyErr(session, body string) error {
 	evt := proto.NotifyEvent{SessionID: session, Body: body}
 	b, _ := json.Marshal(evt)
 
-	resp, err := http.Post(daemonAddr+"/notify", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/notify", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("could not reach wmuxd: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("daemon returned %s: %s", resp.Status, string(bodyBytes))
+		return errors.New(describeStatus(resp))
 	}
 	return nil
 }
@@ -283,7 +282,7 @@ func cmdAttach(args []string) {
 		Native: runtime.GOOS == "windows",
 	}
 	b, _ := json.Marshal(regReq)
-	resp, err := http.Post(daemonAddr+"/sessions/register", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/sessions/register", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux attach: could not reach wmuxd (is it running?): %v\n", err)
 		os.Exit(1)
@@ -302,7 +301,7 @@ func cmdAttach(args []string) {
 	// would otherwise silently leave the session marked "running" forever.
 	deregReq := proto.DeregisterSessionRequest{ID: *id}
 	b, _ = json.Marshal(deregReq)
-	if resp, err := http.Post(daemonAddr+"/sessions/deregister", "application/json", bytes.NewReader(b)); err == nil {
+	if resp, err := daemonPost("/sessions/deregister", "application/json", bytes.NewReader(b)); err == nil {
 		resp.Body.Close()
 	} else {
 		fmt.Fprintf(os.Stderr, "wmux attach: warning: could not deregister session with wmuxd: %v\n", err)
@@ -522,7 +521,7 @@ func cmdPaneExec(args []string) {
 			time.Sleep(500 * time.Millisecond)
 		}
 		b, _ := json.Marshal(proto.ClaimPaneRequest{ID: id})
-		resp, err := http.Post(daemonAddr+"/panes/claim", "application/json", bytes.NewReader(b))
+		resp, err := daemonPost("/panes/claim", "application/json", bytes.NewReader(b))
 		if err != nil {
 			continue // daemon not reachable (yet); retry
 		}
@@ -785,7 +784,7 @@ func cmdNew(args []string) {
 	req := proto.NewSessionRequest{ID: *id, Cwd: *cwd, Command: *command, Distro: *distro}
 	b, _ := json.Marshal(req)
 
-	resp, err := http.Post(daemonAddr+"/sessions", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/sessions", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux new: could not reach wmuxd: %v\n", err)
 		os.Exit(1)
@@ -851,7 +850,7 @@ var errSessionNotFound = errors.New("session not found")
 func closeSession(id string) error {
 	req := proto.CloseSessionRequest{ID: id}
 	b, _ := json.Marshal(req)
-	resp, err := http.Post(daemonAddr+"/sessions/close", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/sessions/close", "application/json", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("could not reach wmuxd: %v", err)
 	}
@@ -861,8 +860,7 @@ func closeSession(id string) error {
 		return fmt.Errorf("%w: %s", errSessionNotFound, strings.TrimSpace(string(body)))
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("daemon returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return errors.New(describeStatus(resp))
 	}
 	return nil
 }
@@ -906,7 +904,7 @@ func cmdList(args []string) {
 // after exit on purpose (`wmux list` shows last known state), but they
 // accumulate forever otherwise — this is the manual cleanup.
 func cmdPrune(args []string) {
-	resp, err := http.Post(daemonAddr+"/sessions/prune", "application/json", nil)
+	resp, err := daemonPost("/sessions/prune", "application/json", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux prune: could not reach wmuxd: %v\n", err)
 		os.Exit(1)
@@ -933,7 +931,7 @@ func cmdPrune(args []string) {
 // cmdWatch tails /events and prints notifications as they arrive — a
 // terminal-only stand-in for the tray UI, useful while wiring hooks up.
 func cmdWatch(args []string) {
-	resp, err := http.Get(daemonAddr + "/events")
+	resp, err := daemonStream("/events")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux watch: could not reach wmuxd: %v\n", err)
 		os.Exit(1)

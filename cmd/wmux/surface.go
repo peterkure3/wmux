@@ -46,7 +46,7 @@ func cmdSurface(args []string) {
 		ID: *id, Cwd: *cwd, Command: *command, Distro: *distro, Native: *native,
 	}
 	b, _ := json.Marshal(req)
-	resp, err := http.Post(daemonAddr+"/surfaces", "application/json", bytes.NewReader(b))
+	resp, err := daemonPost("/surfaces", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux surface: could not reach wmuxd: %v\n", err)
 		os.Exit(1)
@@ -93,7 +93,7 @@ func cmdConnect(args []string) {
 
 	attachURL := daemonAddr + "/surfaces/attach?id=" + url.QueryEscape(*id)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, attachURL, nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := daemonStreamRequest(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux connect: could not reach wmuxd: %v\n", err)
 		os.Exit(1)
@@ -130,7 +130,7 @@ func cmdConnect(args []string) {
 		}
 		lastCols, lastRows = cols, rows
 		b, _ := json.Marshal(proto.SurfaceResizeRequest{ID: *id, Cols: cols, Rows: rows})
-		if resp, err := http.Post(daemonAddr+"/surfaces/resize", "application/json", bytes.NewReader(b)); err == nil {
+		if resp, err := daemonPost("/surfaces/resize", "application/json", bytes.NewReader(b)); err == nil {
 			resp.Body.Close()
 		}
 	}
@@ -222,7 +222,7 @@ func cmdConnect(args []string) {
 // stream ending is what actually tells the user the session is gone.
 func postInput(id string, data []byte) {
 	b, _ := json.Marshal(proto.SurfaceInputRequest{ID: id, Data: data})
-	if resp, err := http.Post(daemonAddr+"/surfaces/input", "application/json", bytes.NewReader(b)); err == nil {
+	if resp, err := daemonPost("/surfaces/input", "application/json", bytes.NewReader(b)); err == nil {
 		resp.Body.Close()
 	}
 }

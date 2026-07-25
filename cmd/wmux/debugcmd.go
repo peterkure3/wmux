@@ -47,7 +47,7 @@ func cmdDebug(args []string) {
 }
 
 func fetchDebugJSON(path string, v any) error {
-	resp, err := http.Get(daemonAddr + path)
+	resp, err := daemonGet(path)
 	if err != nil {
 		return fmt.Errorf("could not reach wmuxd: %w", err)
 	}
@@ -201,7 +201,7 @@ func cmdDebugPprof(args []string) {
 	}
 
 	kind := args[0]
-	var url string
+	var profilePath string
 	switch kind {
 	case "cpu":
 		seconds := 5
@@ -210,17 +210,19 @@ func cmdDebugPprof(args []string) {
 				seconds = s
 			}
 		}
-		url = fmt.Sprintf("%s/debug/pprof/profile?seconds=%d", daemonAddr, seconds)
+		profilePath = fmt.Sprintf("/debug/pprof/profile?seconds=%d", seconds)
 	case "heap":
-		url = daemonAddr + "/debug/pprof/heap"
+		profilePath = "/debug/pprof/heap"
 	case "goroutine":
-		url = daemonAddr + "/debug/pprof/goroutine"
+		profilePath = "/debug/pprof/goroutine"
 	default:
 		fmt.Fprintf(os.Stderr, "wmux debug pprof: unknown kind %q — want cpu, heap, or goroutine\n", kind)
 		os.Exit(1)
 	}
 
-	resp, err := http.Get(url)
+	// Streaming client: a cpu profile blocks for the requested number of
+	// seconds, which can exceed daemonClient's ordinary request budget.
+	resp, err := daemonStream(profilePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux debug pprof: could not reach wmuxd: %v\n", err)
 		os.Exit(1)

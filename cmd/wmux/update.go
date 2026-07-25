@@ -311,7 +311,7 @@ func daemonRunning() bool {
 // surfaces" — that would fail open and kill live surfaces on a transient
 // error.
 func listRunningSessions() ([]proto.SessionInfo, error) {
-	resp, err := http.Get(daemonAddr + "/sessions")
+	resp, err := daemonGet("/sessions")
 	if err != nil {
 		return nil, fmt.Errorf("could not list sessions: %w", err)
 	}
@@ -335,7 +335,7 @@ func listRunningSessions() ([]proto.SessionInfo, error) {
 // stopDaemon asks wmuxd to exit (releasing its .exe file lock) and waits
 // for the port to actually go quiet.
 func stopDaemon() error {
-	resp, err := http.Post(daemonAddr+"/shutdown", "application/json", nil)
+	resp, err := daemonPost("/shutdown", "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("could not reach wmuxd to stop it: %v", err)
 	}

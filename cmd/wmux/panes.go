@@ -20,15 +20,25 @@ import (
 // fetchSessions is the same GET /sessions call cmdList makes, factored out
 // since both cmdPanes and cmdSendKeys need to resolve a session by ID.
 func fetchSessions(cmdName string) []proto.SessionInfo {
-	resp, err := http.Get(daemonAddr + "/sessions")
+	resp, err := daemonGet("/sessions")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux %s: could not reach wmuxd: %v\n", cmdName, err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
+	// Without this, a non-200 (notably 401) decodes an error string into
+	// nothing and reports "no sessions" — the daemon's actual complaint
+	// silently discarded, and `wmux list` cheerfully wrong.
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "wmux %s: %s\n", cmdName, describeStatus(resp))
+		os.Exit(1)
+	}
 
 	var sessions []proto.SessionInfo
-	json.NewDecoder(resp.Body).Decode(&sessions)
+	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux %s: could not parse daemon response: %v\n", cmdName, err)
+		os.Exit(1)
+	}
 	return sessions
 }
 
