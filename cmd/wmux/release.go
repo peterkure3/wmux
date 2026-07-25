@@ -20,10 +20,9 @@ import (
 	"time"
 )
 
-// releaseRepo is the real GitHub repo. Careful: this deliberately differs
-// from go.mod's module path — the repo lives at peterkure3 (with a 3),
-// while go.mod says peterkure. Release URLs must use the real repo;
-// ldflags -X paths follow go.mod.
+// releaseRepo is the GitHub repo releases are published to. It matches
+// go.mod's module path (both peterkure3/wmux) — they diverged once, which
+// silently broke `go install`; keep them in sync.
 const releaseRepo = "peterkure3/wmux"
 
 // releaseClient covers the whole request including body read: an asset is

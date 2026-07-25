@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // paneSpecTTL is how long a filed pane spec stays claimable. A spec that

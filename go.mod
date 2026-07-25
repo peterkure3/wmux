@@ -1,4 +1,4 @@
-module github.com/peterkure/wmux
+module github.com/peterkure3/wmux
 
 go 1.25.0
 

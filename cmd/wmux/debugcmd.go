@@ -19,8 +19,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
-	"github.com/peterkure/wmux/internal/wmuxlog"
+	"github.com/peterkure3/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/wmuxlog"
 )
 
 func cmdDebug(args []string) {

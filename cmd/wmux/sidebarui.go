@@ -21,7 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 const sidebarPoll = 2 * time.Second

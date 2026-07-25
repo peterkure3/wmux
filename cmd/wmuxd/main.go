@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/peterkure/wmux/internal/daemon"
-	"github.com/peterkure/wmux/internal/version"
-	"github.com/peterkure/wmux/internal/wmuxlog"
+	"github.com/peterkure3/wmux/internal/daemon"
+	"github.com/peterkure3/wmux/internal/version"
+	"github.com/peterkure3/wmux/internal/wmuxlog"
 )
 
 func main() {

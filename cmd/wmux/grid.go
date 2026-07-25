@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // cmdGrid opens several agent panes at once in a single new Windows

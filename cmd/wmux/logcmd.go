@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/peterkure/wmux/internal/wmuxlog"
+	"github.com/peterkure3/wmux/internal/wmuxlog"
 )
 
 // cmdLog inspects/configures wmuxd's structured log: `wmux log` (path +

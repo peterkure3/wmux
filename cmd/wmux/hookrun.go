@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/peterkure/wmux/internal/agentprofile"
+	"github.com/peterkure3/wmux/internal/agentprofile"
 )
 
 // cmdHook dispatches `wmux hook run <agent>` and `wmux hook list`.

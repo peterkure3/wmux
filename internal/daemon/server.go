@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // Serve starts the local HTTP API. Bound to 127.0.0.1 only — this is a

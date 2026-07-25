@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // wslBridgeTimeout caps every bridge shell-out: wsl.exe can hang well past

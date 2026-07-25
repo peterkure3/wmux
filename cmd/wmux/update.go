@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
-	"github.com/peterkure/wmux/internal/version"
+	"github.com/peterkure3/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/version"
 )
 
 // defaultRepo is stamped by a previous `wmux update` run via
@@ -231,8 +231,8 @@ func resolveRepo(flagVal string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s does not look like the wmux source repo: %v", repo, err)
 	}
-	if !strings.Contains(string(gomod), "module github.com/peterkure/wmux") {
-		return "", fmt.Errorf("%s\\go.mod is not module github.com/peterkure/wmux", repo)
+	if !strings.Contains(string(gomod), "module github.com/peterkure3/wmux") {
+		return "", fmt.Errorf("%s\\go.mod is not module github.com/peterkure3/wmux", repo)
 	}
 	return repo, nil
 }
@@ -280,9 +280,9 @@ func gitDescribe(repo string) (string, error) {
 func buildBinaries(repo, outDir, ver string) error {
 	builds := []struct{ out, pkg, ldflags string }{
 		{"wmux.exe", "./cmd/wmux", fmt.Sprintf(
-			"-X 'github.com/peterkure/wmux/internal/version.Version=%s' -X 'main.defaultRepo=%s'", ver, repo)},
+			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s' -X 'main.defaultRepo=%s'", ver, repo)},
 		{"wmuxd.exe", "./cmd/wmuxd", fmt.Sprintf(
-			"-X 'github.com/peterkure/wmux/internal/version.Version=%s'", ver)},
+			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s'", ver)},
 	}
 	for _, b := range builds {
 		up.step("building " + b.out)

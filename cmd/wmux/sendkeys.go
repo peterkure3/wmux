@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // cmdSendKeys resolves --id against the daemon's session list and injects

@@ -5,7 +5,7 @@ import "runtime/debug"
 
 // Version is stamped by `wmux update` via
 //
-//	-ldflags "-X github.com/peterkure/wmux/internal/version.Version=<git describe>"
+//	-ldflags "-X github.com/peterkure3/wmux/internal/version.Version=<git describe>"
 //
 // (the -X path follows go.mod's module name, not the GitHub repo URL —
 // note the repo lives at github.com/peterkure3/wmux, with a 3).

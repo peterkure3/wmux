@@ -21,7 +21,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // daemonAddr is where the wmuxd HTTP API lives. WMUX_ADDR overrides the

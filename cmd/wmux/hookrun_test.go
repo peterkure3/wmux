@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/peterkure/wmux/internal/agentprofile"
+	"github.com/peterkure3/wmux/internal/agentprofile"
 )
 
 // Parity tests: evalHook applied to the bundled claude/codex profiles must

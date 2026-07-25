@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 func TestRingWraparound(t *testing.T) {

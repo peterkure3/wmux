@@ -37,9 +37,10 @@ jobs:
       - name: build and package
         run: |
           VER="${GITHUB_REF_NAME}"
-          # -X path follows go.mod's module name (peterkure, no 3) — see
-          # internal/version.
-          LD="-X github.com/peterkure/wmux/internal/version.Version=${VER}"
+          # -X path is the full package path from go.mod. A mismatch here
+          # is silently ignored by the linker (the binary just reports the
+          # default version), so it must track any module rename.
+          LD="-X github.com/peterkure3/wmux/internal/version.Version=${VER}"
           for os in windows linux; do
             ext=""
             [ "$os" = windows ] && ext=".exe"

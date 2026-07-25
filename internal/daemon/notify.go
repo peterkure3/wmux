@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // Matches OSC 9 (basic notify), OSC 99 (extended notify, iTerm2-style),

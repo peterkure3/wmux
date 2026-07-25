@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // detachByte is the connect client's reserved key: Ctrl-] (0x1D, telnet's

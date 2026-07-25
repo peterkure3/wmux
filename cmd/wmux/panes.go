@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // fetchSessions is the same GET /sessions call cmdList makes, factored out

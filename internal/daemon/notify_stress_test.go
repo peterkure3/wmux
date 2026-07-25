@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // TestMain silences the daemon's per-notify log lines — the burst tests

@@ -512,7 +512,7 @@ verifying a new agent live.
 
 ```
 wmux/
-├── go.mod                       module github.com/peterkure/wmux
+├── go.mod                       module github.com/peterkure3/wmux
 ├── README.md                    setup, hook-wiring, next steps (source of truth, keep in sync)
 ├── cmd/
 │   ├── wmuxd/main.go             daemon entrypoint

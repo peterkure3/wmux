@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/proto"
 )
 
 // Session represents one running agent session (a shell running Claude

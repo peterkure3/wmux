@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/peterkure/wmux/internal/proto"
-	"github.com/peterkure/wmux/internal/version"
+	"github.com/peterkure3/wmux/internal/proto"
+	"github.com/peterkure3/wmux/internal/version"
 )
 
 // ring is a small fixed-capacity FIFO buffer, used for both recovered
