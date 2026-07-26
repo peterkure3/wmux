@@ -35,70 +35,7 @@ var daemonAddr = func() string {
 }()
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "notify":
-		cmdNotify(os.Args[2:])
-	case "hook":
-		cmdHook(os.Args[2:])
-	case "hook-claude": // legacy alias, kept so existing ~/.claude/settings.json wiring keeps working
-		runHook("hook-claude", "claude", os.Args[2:])
-	case "hook-codex": // legacy alias, kept so existing ~/.codex/config.toml wiring keeps working
-		runHook("hook-codex", "codex", os.Args[2:])
-	case "new":
-		cmdNew(os.Args[2:])
-	case "attach":
-		cmdAttach(os.Args[2:])
-	case "surface":
-		cmdSurface(os.Args[2:])
-	case "connect":
-		cmdConnect(os.Args[2:])
-	case "pane":
-		cmdPane(os.Args[2:])
-	case "grid":
-		cmdGrid(os.Args[2:])
-	case "pane-exec":
-		cmdPaneExec(os.Args[2:])
-	case "sidebar":
-		cmdSidebar(os.Args[2:])
-	case "sidebar-ui":
-		cmdSidebarUI(os.Args[2:])
-	case "theme":
-		cmdTheme(os.Args[2:])
-	case "log":
-		cmdLog(os.Args[2:])
-	case "debug":
-		cmdDebug(os.Args[2:])
-	case "focus":
-		cmdFocus(os.Args[2:])
-	case "close":
-		cmdClose(os.Args[2:])
-	case "list":
-		cmdList(os.Args[2:])
-	case "prune":
-		cmdPrune(os.Args[2:])
-	case "watch":
-		cmdWatch(os.Args[2:])
-	case "update":
-		cmdUpdate(os.Args[2:])
-	case "autostart":
-		cmdAutostart(os.Args[2:])
-	case "__elevated-schtasks": // hidden: see runElevated in elevate_windows.go
-		cmdElevatedSchtasks(os.Args[2:])
-	case "panes":
-		cmdPanes(os.Args[2:])
-	case "send-keys":
-		cmdSendKeys(os.Args[2:])
-	case "version":
-		cmdVersion(os.Args[2:])
-	default:
-		usage()
-		os.Exit(1)
-	}
+	dispatch()
 }
 
 const banner = `
