@@ -293,9 +293,16 @@ func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSurfaceAttach streams a surface's screen to a client as JSON
-// lines: one replay frame (full current screen) up front, then ordered
-// output frames, with a fresh replay after any resize and an exit frame
-// when the process ends. Called by `wmux connect`.
+// lines. Two independently selected shapes on the same endpoint:
+//
+//   - mode=bytes (default, what `wmux connect` uses): one replay frame
+//     (an ANSI repaint of the full current screen) up front, then
+//     ordered raw-output frames, a fresh replay after any resize, and an
+//     exit frame when the process ends.
+//   - mode=cells: the rich-client alternative from Part 3 of the phased
+//     refactor plan — draw runs instead of ANSI bytes, with damage
+//     tracking so a redraw only names the rows that actually changed.
+//     See proto.CellsFrame.
 func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -304,6 +311,35 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.URL.Query().Get("id")
 
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	ctx := r.Context()
+
+	if r.URL.Query().Get("mode") == "cells" {
+		ch, err := d.AttachSurfaceCells(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		defer d.DetachSurfaceCells(id, ch)
+
+		enc := json.NewEncoder(w)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case frame := <-ch:
+				if err := enc.Encode(frame); err != nil {
+					return
+				}
+				flusher.Flush()
+				if frame.Type == proto.CellsExit {
+					return
+				}
+			}
+		}
+	}
+
 	ch, err := d.AttachSurface(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -311,11 +347,7 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	defer d.DetachSurface(id, ch)
 
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Cache-Control", "no-cache")
-
 	enc := json.NewEncoder(w)
-	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():

@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"fmt"
+	"image/color"
 	"log/slog"
 	"os/exec"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -36,6 +38,17 @@ type Surface struct {
 	rows    int
 	exited  bool
 	clients map[chan proto.SurfaceFrame]struct{}
+
+	// cellClients and cellSnapshot back the rich (mode=cells) attach path
+	// — see cellsframe.go. cellSnapshot is the Runs last broadcast for
+	// each row, shared across every cells client (not per-client: attach
+	// and the write-batch broadcast below both hold mu for their whole
+	// duration, so "changed since the last frame" is unambiguous for
+	// every currently-attached cells client at any instant — a new
+	// client's own baseline is the direct read its attach takes, not
+	// this cache).
+	cellClients  map[chan proto.CellsFrame]struct{}
+	cellSnapshot [][]proto.Run
 }
 
 // SpawnSurface creates a surface session: a ConPTY the daemon owns, the
@@ -81,12 +94,13 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	}
 
 	sfc := &Surface{
-		pty:     p,
-		cmd:     cmd,
-		emu:     vt.NewEmulator(cols, rows),
-		cols:    cols,
-		rows:    rows,
-		clients: make(map[chan proto.SurfaceFrame]struct{}),
+		pty:         p,
+		cmd:         cmd,
+		emu:         vt.NewEmulator(cols, rows),
+		cols:        cols,
+		rows:        rows,
+		clients:     make(map[chan proto.SurfaceFrame]struct{}),
+		cellClients: make(map[chan proto.CellsFrame]struct{}),
 	}
 
 	// killOnClose is true for surfaces, unlike Spawn-mode sessions: a
@@ -178,6 +192,7 @@ func (d *Daemon) readSurface(sess *Session) {
 				default: // slow client; drop rather than block the pty reader
 				}
 			}
+			sfc.broadcastCellsUpdateLocked()
 			sfc.mu.Unlock()
 
 			// OSC notify scan on the raw stream, identical policy to
@@ -207,6 +222,12 @@ func (d *Daemon) reapSurface(sess *Session) {
 	for ch := range sfc.clients {
 		select {
 		case ch <- proto.SurfaceFrame{Type: proto.FrameExit}:
+		default:
+		}
+	}
+	for ch := range sfc.cellClients {
+		select {
+		case ch <- proto.CellsFrame{Type: proto.CellsExit}:
 		default:
 		}
 	}
@@ -307,6 +328,49 @@ func (d *Daemon) DetachSurface(id string, ch chan proto.SurfaceFrame) {
 	sfc.mu.Unlock()
 }
 
+// AttachSurfaceCells is AttachSurface for the rich (mode=cells) client
+// path (see proto.CellsFrame): the returned channel first carries a full
+// "replay" frame (every row), then "update" frames naming only the rows
+// that changed since the previous frame this client received, then an
+// "exit" frame if the process ends. Call DetachSurfaceCells when the
+// client goes away.
+func (d *Daemon) AttachSurfaceCells(id string) (chan proto.CellsFrame, error) {
+	_, sfc, err := d.surface(id)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan proto.CellsFrame, 256)
+
+	sfc.mu.Lock()
+	ch <- sfc.cellsReplayFrameLocked()
+	sfc.cellClients[ch] = struct{}{}
+	if sfc.exited {
+		ch <- proto.CellsFrame{Type: proto.CellsExit}
+	}
+	sfc.mu.Unlock()
+
+	return ch, nil
+}
+
+// DetachSurfaceCells drops a client subscription created by
+// AttachSurfaceCells.
+func (d *Daemon) DetachSurfaceCells(id string, ch chan proto.CellsFrame) {
+	d.mu.RLock()
+	sess, ok := d.sessions[id]
+	d.mu.RUnlock()
+	if !ok {
+		return
+	}
+	sfc := sess.surfaceRef()
+	if sfc == nil {
+		return
+	}
+	sfc.mu.Lock()
+	delete(sfc.cellClients, ch)
+	sfc.mu.Unlock()
+}
+
 // InputSurface writes client keystrokes to the surface's pty.
 func (d *Daemon) InputSurface(id string, data []byte) error {
 	_, sfc, err := d.surface(id)
@@ -348,6 +412,14 @@ func (d *Daemon) ResizeSurface(id string, cols, rows int) error {
 	for ch := range sfc.clients {
 		select {
 		case ch <- frame:
+		default:
+		}
+	}
+
+	cellsFrame := sfc.cellsReplayFrameLocked()
+	for ch := range sfc.cellClients {
+		select {
+		case ch <- cellsFrame:
 		default:
 		}
 	}
@@ -399,4 +471,174 @@ func (s *Surface) replayLocked() []byte {
 	fmt.Fprintf(&b, "\x1b[0m\x1b[%d;%dH", pos.Y+1, pos.X+1)
 
 	return []byte(b.String())
+}
+
+// cellsCursorLocked reports the cursor position for a CellsFrame. Caller
+// must hold sfc.mu.
+//
+// Visible is always true: the vt emulator tracks DECTCEM cursor-hidden
+// state internally but doesn't expose a public getter for it (verified
+// against the package's exported API), and replayLocked has the same gap
+// today — every ANSI replay already positions the cursor unconditionally.
+// This isn't a new limitation this feature introduces.
+func (s *Surface) cellsCursorLocked() (proto.Pos, bool) {
+	pos := s.emu.CursorPosition()
+	return proto.Pos{X: pos.X, Y: pos.Y}, true
+}
+
+// buildRunsForRowLocked scans row y and coalesces consecutive same-style
+// cells into Runs — the CellsFrame equivalent of replayLocked's per-row
+// ANSI loop, minus the escape sequences. Caller must hold sfc.mu.
+func (s *Surface) buildRunsForRowLocked(y int) []proto.Run {
+	var runs []proto.Run
+	var cur uv.Style
+	var text strings.Builder
+	startX := -1
+
+	flush := func() {
+		if startX == -1 || text.Len() == 0 {
+			return
+		}
+		runs = append(runs, proto.Run{
+			X: startX, Text: text.String(),
+			FG: colorHex(cur.Fg), BG: colorHex(cur.Bg), Attrs: styleAttrs(&cur),
+		})
+		text.Reset()
+	}
+
+	for x := 0; x < s.cols; {
+		cell := s.emu.CellAt(x, y)
+		content := " "
+		var style uv.Style
+		width := 1
+		if cell != nil {
+			if cell.Content != "" {
+				content = cell.Content
+			}
+			style = cell.Style
+			if cell.Width > 1 {
+				width = cell.Width
+			}
+		}
+		if startX == -1 || !style.Equal(&cur) {
+			flush()
+			cur = style
+			startX = x
+		}
+		text.WriteString(content)
+		x += width
+	}
+	flush()
+	return runs
+}
+
+// cellsReplayFrameLocked builds a full "replay" CellsFrame — every row —
+// and resets cellSnapshot to match it, so the next write-batch diff
+// (broadcastCellsUpdateLocked) starts clean instead of re-sending
+// everything as a redundant "update" right after. Caller must hold
+// sfc.mu; called from AttachSurfaceCells (a new client's baseline) and
+// ResizeSurface (dimensions changed, every existing client needs a fresh
+// baseline too).
+func (s *Surface) cellsReplayFrameLocked() proto.CellsFrame {
+	rows := make([]proto.RowUpdate, s.rows)
+	snapshot := make([][]proto.Run, s.rows)
+	for y := 0; y < s.rows; y++ {
+		runs := s.buildRunsForRowLocked(y)
+		rows[y] = proto.RowUpdate{Y: y, Runs: runs}
+		snapshot[y] = runs
+	}
+	s.cellSnapshot = snapshot
+
+	cursor, visible := s.cellsCursorLocked()
+	return proto.CellsFrame{
+		Type: proto.CellsReplay, Rows: rows, Cursor: cursor, Visible: visible,
+		Cols: s.cols, RowCnt: s.rows,
+	}
+}
+
+// broadcastCellsUpdateLocked diffs every row's current Runs against
+// cellSnapshot (the last frame broadcast to cells clients) and, if
+// anything changed, sends an "update" CellsFrame naming only the changed
+// rows to every attached cells client. Skips the scan entirely when no
+// cells client is attached, so a plain `wmux connect` session pays
+// nothing for this feature. Caller must hold sfc.mu; called after every
+// pty read in readSurface, mirroring the existing bytes-mode broadcast
+// right above it.
+func (s *Surface) broadcastCellsUpdateLocked() {
+	if len(s.cellClients) == 0 {
+		return
+	}
+	if len(s.cellSnapshot) != s.rows {
+		s.cellSnapshot = make([][]proto.Run, s.rows)
+	}
+
+	var changed []proto.RowUpdate
+	for y := 0; y < s.rows; y++ {
+		runs := s.buildRunsForRowLocked(y)
+		if !rowsEqual(runs, s.cellSnapshot[y]) {
+			changed = append(changed, proto.RowUpdate{Y: y, Runs: runs})
+			s.cellSnapshot[y] = runs
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+
+	cursor, visible := s.cellsCursorLocked()
+	frame := proto.CellsFrame{Type: proto.CellsUpdate, Rows: changed, Cursor: cursor, Visible: visible}
+	for ch := range s.cellClients {
+		select {
+		case ch <- frame:
+		default: // slow client; drop rather than block the pty reader
+		}
+	}
+}
+
+// rowsEqual compares two rows' Runs for equality — small slices of small
+// value structs, so reflect.DeepEqual's overhead is negligible next to
+// the CellAt() scan that built them.
+func rowsEqual(a, b []proto.Run) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// colorHex renders a color.Color as "#rrggbb", or "" for nil (meaning
+// "default color", not black). RGBA() returns 16-bit premultiplied
+// components; terminal colors are always fully opaque, so the low byte
+// of each is discarded rather than unpremultiplied.
+func colorHex(c color.Color) string {
+	if c == nil {
+		return ""
+	}
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
+}
+
+// styleAttrs translates ultraviolet's Style bits into proto's own Attr*
+// bitmask (see Run.Attrs) — kept as an explicit translation, not a raw
+// copy of ultraviolet's bit numbering, so the wire format doesn't change
+// out from under clients if that library's internal layout ever does.
+func styleAttrs(s *uv.Style) uint8 {
+	var a uint8
+	if s.Attrs&uv.AttrBold != 0 {
+		a |= proto.AttrBold
+	}
+	if s.Attrs&uv.AttrFaint != 0 {
+		a |= proto.AttrFaint
+	}
+	if s.Attrs&uv.AttrItalic != 0 {
+		a |= proto.AttrItalic
+	}
+	if s.Attrs&uv.AttrBlink != 0 {
+		a |= proto.AttrBlink
+	}
+	if s.Attrs&uv.AttrReverse != 0 {
+		a |= proto.AttrReverse
+	}
+	if s.Attrs&uv.AttrStrikethrough != 0 {
+		a |= proto.AttrStrikethrough
+	}
+	if s.Underline != uv.UnderlineNone {
+		a |= proto.AttrUnderline
+	}
+	return a
 }

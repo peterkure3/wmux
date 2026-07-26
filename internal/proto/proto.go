@@ -195,6 +195,77 @@ const (
 	FrameExit   = "exit"
 )
 
+// Pos is a 0-indexed screen coordinate.
+type Pos struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// Run is a styled run of same-style cells on one row — the unit a rich
+// frontend draws (e.g. one lipgloss.NewStyle().Render(Text) call), per
+// wmux-tui-refactor-plan.md's Part 3. FG/BG are "#rrggbb", empty meaning
+// "default color" (not black/white). Bit values are proto's own — decoupled
+// from whatever internal library the daemon uses for its VT model, so
+// that stays a daemon-side implementation detail.
+type Run struct {
+	X     int    `json:"x"`
+	Text  string `json:"text"`
+	FG    string `json:"fg,omitempty"`
+	BG    string `json:"bg,omitempty"`
+	Attrs uint8  `json:"attrs,omitempty"`
+}
+
+// Attribute bits for Run.Attrs.
+const (
+	AttrBold uint8 = 1 << iota
+	AttrFaint
+	AttrItalic
+	AttrUnderline
+	AttrBlink
+	AttrReverse
+	AttrStrikethrough
+)
+
+// RowUpdate is one row's current content, always given in full (never a
+// diff *within* the row) — so a client that missed an earlier frame is
+// still consistent the moment it applies this one.
+type RowUpdate struct {
+	Y    int   `json:"y"`
+	Runs []Run `json:"runs"`
+}
+
+// CellsFrame is one JSON line in the GET /surfaces/attach?mode=cells
+// stream — the rich-client alternative to SurfaceFrame's ANSI replay (see
+// Part 3 of the phased refactor plan: "Rich frontends should consume the
+// server's authoritative render state: draw runs, place the cursor, and
+// send keys"). mode=bytes (the default, what `wmux connect` uses) is
+// completely unaffected by this — it is a different, independently
+// selected stream shape on the same endpoint, not a replacement.
+//
+//	{"type":"replay","cols":120,"rows":30,"rows":[...every row...],"cursor":{...}}   sent first and after every resize
+//	{"type":"update","rows":[...only rows that changed...],"cursor":{...}}           ordered live updates
+//	{"type":"exit"}                                                                   the surface's process ended
+//
+// A client renders a replay by drawing every row from scratch, then
+// applies each update by redrawing only the rows named in it — cheap
+// even for a busy agent, since a spinner redraw touches one row, not the
+// whole screen.
+type CellsFrame struct {
+	Type    string      `json:"type"`
+	Rows    []RowUpdate `json:"rows,omitempty"`
+	Cursor  Pos         `json:"cursor"`
+	Visible bool        `json:"cursorVisible"`
+	Cols    int         `json:"cols,omitempty"` // set on "replay" only; dimensions don't change without one
+	RowCnt  int         `json:"rowCount,omitempty"`
+}
+
+// Frame types for CellsFrame.Type.
+const (
+	CellsReplay = "replay"
+	CellsUpdate = "update"
+	CellsExit   = "exit"
+)
+
 // SurfaceInputRequest is the body for POST /surfaces/input — raw bytes
 // (keystrokes) written to the surface's PTY.
 type SurfaceInputRequest struct {
