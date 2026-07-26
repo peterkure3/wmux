@@ -108,7 +108,7 @@ Plain `wmux` opens it. Panes are daemon-owned sessions; the sidebar is
 one of the panes:
 
 ```
-wmux                      # session list, open panes from there with n
+wmux                      # sidebar + one shell pane, open more with n
 wmux claude               # open it with one pane already running claude
 wmux grid 4               # four panes in a 2x2 grid
 wmux grid 4 --claude      # the same grid, every pane running claude
@@ -136,11 +136,11 @@ pane. The mode is shown in the footer.
 
 | COMMAND key | does |
 | --- | --- |
-| `\|` / `v` | split the focused pane side by side |
-| `-` / `s` | split the focused pane stacked |
+| `v` / `\|` | split the focused pane side by side (vertical divider) |
+| `h` / `-` / `s` | split the focused pane stacked (horizontal divider) |
 | `n` | new pane, same axis as last time |
 | `x` | close the focused pane |
-| `tab`, arrows / `hjkl` | cycle / move focus |
+| `tab`, arrows / `jkl` | cycle / move focus |
 | `b` | show or hide the sidebar |
 | `g` | snap every pane into a balanced grid |
 | `esc` / `i` | back to INSERT (typing at the pane) |

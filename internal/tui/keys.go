@@ -24,7 +24,7 @@ import (
 
 const (
 	insertModeHelp  = "ctrl+b: commands · ctrl+o: cycle panes"
-	commandModeHelp = "| ─ split · n new · x close · tab/ctrl+o cycle · arrows focus · b sidebar · g grid · esc insert · q quit"
+	commandModeHelp = "h horiz · v vert split · n new · x close · tab/ctrl+o cycle · arrows focus · b sidebar · g grid · esc insert · q quit"
 )
 
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -91,7 +91,7 @@ func (m tuiModel) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleFocus()
 		return m, nil
 
-	case "left", "h":
+	case "left":
 		return m.moveFocus("left")
 	case "right", "l":
 		return m.moveFocus("right")
@@ -100,10 +100,10 @@ func (m tuiModel) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		return m.moveFocus("down")
 
-	case "|", "v":
+	case "v", "|":
 		// Vertical divider, panes side by side.
 		return m.startSplit(layout.SplitRight)
-	case "-", "_", "s":
+	case "h", "-", "_", "s":
 		// Horizontal divider, panes stacked.
 		return m.startSplit(layout.SplitDown)
 	case "n":

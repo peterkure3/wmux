@@ -39,9 +39,9 @@ func runTUI(cmdName string, opts tui.Options) {
 
 // cmdTui opens the multiplexer. This is also what plain `wmux` runs.
 //
-// With trailing arguments (or --with) it opens one pane running that
-// command; with none it opens the session list alone, from which panes
-// are created interactively.
+// It always opens with the sidebar and one pane — trailing arguments (or
+// --with) name the pane's command; with none it falls back to a shell,
+// same as `wmux surface`/`wmux grid` do when no command was named.
 func cmdTui(args []string) {
 	fs := newFlagSet("tui")
 	with := fs.String("with", "", "command for the first pane (or pass it as trailing arguments)")
@@ -52,13 +52,15 @@ func cmdTui(args []string) {
 	fs.Parse(args)
 
 	command := resolveCmd(positionalCommand(*with, fs.Args()))
+	if command == "" {
+		command = defaultShellCommand(*native)
+	}
 
-	var opts tui.Options
-	if command != "" {
-		opts.Open = []tui.PaneSpec{{
+	opts := tui.Options{
+		Open: []tui.PaneSpec{{
 			ID: *id, Cwd: resolveCwd(*cwd), Command: command,
 			Distro: *distro, Native: *native,
-		}}
+		}},
 	}
 	runTUI("tui", opts)
 }
