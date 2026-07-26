@@ -51,7 +51,7 @@ func cmdTheme(args []string) {
 	name := args[0]
 	if _, ok := sidebarThemes[name]; !ok {
 		fmt.Fprintf(os.Stderr, "wmux theme: unknown theme %q — available: %s\n", name, strings.Join(names, ", "))
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	path := themeConfigPath()

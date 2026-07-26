@@ -55,15 +55,15 @@ func cmdSidebar(args []string) {
 	if *grid != "" {
 		if *with == "" || *cwd == "" {
 			fmt.Fprintln(os.Stderr, "wmux sidebar: --grid requires --with and --cwd")
-			os.Exit(1)
+			os.Exit(2)
 		}
 		if *bare || *id != "" {
 			fmt.Fprintln(os.Stderr, "wmux sidebar: --grid cannot be combined with --bare or --id")
-			os.Exit(1)
+			os.Exit(2)
 		}
 		if !*native && looksLikeWindowsCommand(*with) {
 			fmt.Fprintf(os.Stderr, "wmux sidebar: --with %q looks like a native Windows command — add --native\n", *with)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		idList := parseGridIDs("sidebar", *grid)
 		// File every spec before wt.exe launches so no pane-exec can beat
@@ -93,11 +93,11 @@ func cmdSidebar(args []string) {
 	if *with != "" {
 		if *cwd == "" {
 			fmt.Fprintln(os.Stderr, "wmux sidebar: --with requires --cwd")
-			os.Exit(1)
+			os.Exit(2)
 		}
 		if !*native && looksLikeWindowsCommand(*with) {
 			fmt.Fprintf(os.Stderr, "wmux sidebar: --with %q looks like a native Windows command — add --native\n", *with)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		paneID := *id
 		if paneID == "" {
@@ -105,7 +105,7 @@ func cmdSidebar(args []string) {
 		}
 		if paneID == sidebarTitle {
 			fmt.Fprintf(os.Stderr, "wmux sidebar: session ID %q is reserved for the sidebar itself\n", sidebarTitle)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		spec := proto.PaneSpec{ID: paneID, Cwd: *cwd, Distro: *distro, Command: *with, Native: *native}
 		if err := filePaneSpec(spec); err != nil {

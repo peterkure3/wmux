@@ -26,13 +26,13 @@ import (
 func cmdHook(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "wmux hook: expected 'run <agent>' or 'list'")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	switch args[0] {
 	case "run":
 		if len(args) < 2 || strings.HasPrefix(args[1], "-") {
 			fmt.Fprintln(os.Stderr, "wmux hook run: missing <agent> (try 'wmux hook list')")
-			os.Exit(1)
+			os.Exit(2)
 		}
 		runHook("hook run "+args[1], args[1], args[2:])
 	case "list":
@@ -41,7 +41,7 @@ func cmdHook(args []string) {
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "wmux hook: unknown subcommand %q (expected 'run' or 'list')\n", args[0])
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 

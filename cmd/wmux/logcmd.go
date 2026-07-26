@@ -29,7 +29,7 @@ func cmdLog(args []string) {
 		fmt.Println(wmuxlog.LogPath())
 	default:
 		fmt.Fprintf(os.Stderr, "wmux log: unknown subcommand %q — want tail, level, or path\n", args[0])
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 

@@ -118,7 +118,7 @@ func cmdNotify(args []string) {
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "wmux notify: missing <message>")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	pushNotify(*session, fs.Arg(0), "notify")
 }
@@ -195,12 +195,12 @@ func cmdAttach(args []string) {
 
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "wmux attach: --id is required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	cmdArgs := fs.Args()
 	if len(cmdArgs) == 0 {
 		fmt.Fprintln(os.Stderr, "wmux attach: missing command, e.g. 'wmux attach --id x -- claude'")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -224,7 +224,7 @@ func cmdAttach(args []string) {
 	resp, err := daemonPost("/sessions/register", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux attach: could not reach wmuxd (is it running?): %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	regBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -283,11 +283,11 @@ func cmdPane(args []string) {
 
 	if *id == "" || *cwd == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux pane: --id, --cwd, and --cmd are required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	if *id == sidebarTitle {
 		fmt.Fprintf(os.Stderr, "wmux pane: session ID %q is reserved for the sidebar itself\n", sidebarTitle)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	// Catch the "native agent, forgot --native" mistake up front: plain
@@ -297,7 +297,7 @@ func cmdPane(args []string) {
 	// error.
 	if !*native && looksLikeWindowsCommand(*command) {
 		fmt.Fprintf(os.Stderr, "wmux pane: --cmd %q looks like a native Windows command, but plain 'wmux pane' runs --cmd inside WSL — add --native\n", *command)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	// The pane runs the fixed "wmux" Windows Terminal profile instead of a
@@ -635,7 +635,7 @@ func cmdFocus(args []string) {
 		valid := map[string]bool{"left": true, "right": true, "up": true, "down": true}
 		if !valid[*dir] {
 			fmt.Fprintln(os.Stderr, "wmux focus: --dir must be left, right, up, or down")
-			os.Exit(1)
+			os.Exit(2)
 		}
 		// -w 0 targets the most recently used WT window — for an agent
 		// running inside a pane, that's its own window.
@@ -654,7 +654,7 @@ func cmdFocus(args []string) {
 
 	default:
 		fmt.Fprintln(os.Stderr, "wmux focus: exactly one of --id or --dir is required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 
@@ -717,7 +717,7 @@ func cmdNew(args []string) {
 
 	if *id == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux new: --id and --cmd are required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	req := proto.NewSessionRequest{ID: *id, Cwd: *cwd, Command: *command, Distro: *distro}
@@ -726,7 +726,7 @@ func cmdNew(args []string) {
 	resp, err := daemonPost("/sessions", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux new: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 
@@ -759,7 +759,7 @@ func cmdClose(args []string) {
 
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "wmux close: --id is required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	err := closeSession(*id)
@@ -776,6 +776,10 @@ func cmdClose(args []string) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "wmux close: %v\n", err)
+	var unreachable *errWmuxdUnreachable
+	if errors.As(err, &unreachable) {
+		os.Exit(3)
+	}
 	os.Exit(1)
 }
 
@@ -791,7 +795,7 @@ func closeSession(id string) error {
 	b, _ := json.Marshal(req)
 	resp, err := daemonPost("/sessions/close", "application/json", bytes.NewReader(b))
 	if err != nil {
-		return fmt.Errorf("could not reach wmuxd: %v", err)
+		return &errWmuxdUnreachable{err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
@@ -846,7 +850,7 @@ func cmdPrune(args []string) {
 	resp, err := daemonPost("/sessions/prune", "application/json", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux prune: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -873,7 +877,7 @@ func cmdWatch(args []string) {
 	resp, err := daemonStream("/events")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux watch: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 

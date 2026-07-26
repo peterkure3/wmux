@@ -19,11 +19,11 @@ func cmdSendKeys(args []string) {
 	keys := fs.Args()
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "wmux send-keys: --id is required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	if len(keys) == 0 {
 		fmt.Fprintln(os.Stderr, `wmux send-keys: missing keys, e.g. 'wmux send-keys --id x -- Enter' or -- "Ctrl c"`)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	sessions := fetchSessions("send-keys")

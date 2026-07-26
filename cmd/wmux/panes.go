@@ -23,7 +23,7 @@ func fetchSessions(cmdName string) []proto.SessionInfo {
 	resp, err := daemonGet("/sessions")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux %s: could not reach wmuxd: %v\n", cmdName, err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 	// Without this, a non-200 (notably 401) decodes an error string into
@@ -49,9 +49,25 @@ func fetchSessions(cmdName string) []proto.SessionInfo {
 // server-side) but actually has a console attached and interactable.
 // WSL-targeted (non-native) sessions have no PID meaningful to the
 // Windows window table, so they're reported as such rather than guessed.
+// paneRow is one line of `wmux panes` output — a session plus the
+// console-window status wt.exe itself exposes no API for.
+type paneRow struct {
+	proto.SessionInfo
+	Window string `json:"window"`
+	Title  string `json:"title"`
+}
+
 func cmdPanes(args []string) {
+	fs := newFlagSet("panes")
+	jsonOut := fs.Bool("json", false, "print sessions with console-window status as JSON")
+	fs.Parse(args)
+
 	sessions := fetchSessions("panes")
 	if len(sessions) == 0 {
+		if *jsonOut {
+			json.NewEncoder(os.Stdout).Encode([]paneRow{})
+			return
+		}
 		fmt.Println("no sessions")
 		return
 	}
@@ -84,6 +100,16 @@ func cmdPanes(args []string) {
 		// wt:<hwnd> = a WT window contains a pane/tab with this session's
 		// title; the handle is the WT window's, not one the session owns.
 		rows[id] = resolved{"wt:" + hwnd, id}
+	}
+
+	if *jsonOut {
+		out := make([]paneRow, len(sessions))
+		for i, s := range sessions {
+			r := rows[s.ID]
+			out[i] = paneRow{SessionInfo: s, Window: r.window, Title: r.title}
+		}
+		json.NewEncoder(os.Stdout).Encode(out)
+		return
 	}
 
 	fmt.Printf("%-20s %-8s %-8s %-12s %s\n", "ID", "RUNNING", "PID", "WINDOW", "TITLE")

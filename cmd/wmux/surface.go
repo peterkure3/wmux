@@ -39,7 +39,7 @@ func cmdSurface(args []string) {
 
 	if *id == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux surface: --id and --cmd are required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	req := proto.NewSurfaceRequest{
@@ -49,7 +49,7 @@ func cmdSurface(args []string) {
 	resp, err := daemonPost("/surfaces", "application/json", bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux surface: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -79,11 +79,11 @@ func cmdConnect(args []string) {
 
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "wmux connect: --id is required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		fmt.Fprintln(os.Stderr, "wmux connect: stdin is not a terminal")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	// The attach stream lives on a cancellable context so detach can shut
@@ -96,7 +96,7 @@ func cmdConnect(args []string) {
 	resp, err := daemonStreamRequest(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux connect: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

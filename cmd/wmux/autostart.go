@@ -14,7 +14,7 @@ import (
 func cmdAutostart(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "wmux autostart: missing subcommand (install|uninstall|status)")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	wmuxd, err := siblingWmuxd()
@@ -47,7 +47,7 @@ func cmdAutostart(args []string) {
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "wmux autostart: unknown subcommand %q (install|uninstall|status)\n", args[0])
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 

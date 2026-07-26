@@ -35,7 +35,7 @@ func cmdGrid(args []string) {
 
 	if *ids == "" || *cwd == "" || *command == "" {
 		fmt.Fprintln(os.Stderr, "wmux grid: --ids, --cwd, and --cmd are required")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	idList := parseGridIDs("grid", *ids)
@@ -44,7 +44,7 @@ func cmdGrid(args []string) {
 	// inside WSL fails as an unreadable pane flash.
 	if !*native && looksLikeWindowsCommand(*command) {
 		fmt.Fprintf(os.Stderr, "wmux grid: --cmd %q looks like a native Windows command, but plain 'wmux grid' runs --cmd inside WSL — add --native\n", *command)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	if err := ensureWTProfileFragment(); err != nil {
@@ -82,19 +82,19 @@ func parseGridIDs(cmdName, raw string) []string {
 		}
 		if id == sidebarTitle {
 			fmt.Fprintf(os.Stderr, "wmux %s: session ID %q is reserved for the sidebar itself\n", cmdName, sidebarTitle)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		idList = append(idList, id)
 	}
 	if len(idList) < 2 || len(idList) > 4 {
 		fmt.Fprintf(os.Stderr, "wmux %s: need 2-4 pane IDs, got %d — for one pane use 'wmux pane'\n", cmdName, len(idList))
-		os.Exit(1)
+		os.Exit(2)
 	}
 	seen := map[string]bool{}
 	for _, id := range idList {
 		if seen[id] {
 			fmt.Fprintf(os.Stderr, "wmux %s: duplicate pane ID %q\n", cmdName, id)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		seen[id] = true
 	}

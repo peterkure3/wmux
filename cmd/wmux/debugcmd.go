@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,12 +27,12 @@ import (
 func cmdDebug(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "wmux debug: want a subcommand — state, panics, events, dump, or pprof")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	switch args[0] {
 	case "state":
-		cmdDebugState()
+		cmdDebugState(args[1:])
 	case "panics":
 		cmdDebugPanics()
 	case "events":
@@ -42,14 +43,34 @@ func cmdDebug(args []string) {
 		cmdDebugPprof(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wmux debug: unknown subcommand %q — want state, panics, events, dump, or pprof\n", args[0])
-		os.Exit(1)
+		os.Exit(2)
 	}
+}
+
+// errWmuxdUnreachable distinguishes "could not even connect" (exit 3, a
+// transport failure) from every other fetchDebugJSON failure like a
+// non-200 or a decode error (exit 1, the command itself failed) — without
+// each of fetchDebugJSON's four callers re-deriving that from error text.
+type errWmuxdUnreachable struct{ err error }
+
+func (e *errWmuxdUnreachable) Error() string { return fmt.Sprintf("could not reach wmuxd: %v", e.err) }
+func (e *errWmuxdUnreachable) Unwrap() error { return e.err }
+
+// exitFetchErr prints the given prefix + err and exits 3 if err is an
+// errWmuxdUnreachable (transport failure), else 1 (the command failed).
+func exitFetchErr(prefix string, err error) {
+	fmt.Fprintf(os.Stderr, "%s: %v\n", prefix, err)
+	var unreachable *errWmuxdUnreachable
+	if errors.As(err, &unreachable) {
+		os.Exit(3)
+	}
+	os.Exit(1)
 }
 
 func fetchDebugJSON(path string, v any) error {
 	resp, err := daemonGet(path)
 	if err != nil {
-		return fmt.Errorf("could not reach wmuxd: %w", err)
+		return &errWmuxdUnreachable{err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -59,12 +80,21 @@ func fetchDebugJSON(path string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-func cmdDebugState() {
+func cmdDebugState(args []string) {
+	fs := newFlagSet("debug state")
+	jsonOut := fs.Bool("json", false, "print wmuxd's runtime state as JSON instead of a table")
+	fs.Parse(args)
+
 	var state proto.DebugState
 	if err := fetchDebugJSON("/debug/state", &state); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux debug state: %v\n", err)
-		os.Exit(1)
+		exitFetchErr("wmux debug state", err)
 	}
+
+	if *jsonOut {
+		json.NewEncoder(os.Stdout).Encode(state)
+		return
+	}
+
 	fmt.Printf("version:   %s\n", state.Version)
 	fmt.Printf("started:   %s\n", state.StartedAt.Format(time.RFC3339))
 	fmt.Printf("uptime:    %s\n", state.Uptime)
@@ -83,8 +113,7 @@ func cmdDebugState() {
 func cmdDebugPanics() {
 	var panics []proto.PanicEntry
 	if err := fetchDebugJSON("/debug/panics", &panics); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux debug panics: %v\n", err)
-		os.Exit(1)
+		exitFetchErr("wmux debug panics", err)
 	}
 	if len(panics) == 0 {
 		fmt.Println("no panics recovered since wmuxd started")
@@ -98,8 +127,7 @@ func cmdDebugPanics() {
 func cmdDebugEvents() {
 	var events []proto.Event
 	if err := fetchDebugJSON("/debug/events/recent", &events); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux debug events: %v\n", err)
-		os.Exit(1)
+		exitFetchErr("wmux debug events", err)
 	}
 	if len(events) == 0 {
 		fmt.Println("no recent events")
@@ -127,8 +155,7 @@ func cmdDebugDump() {
 	dump.Time = time.Now()
 
 	if err := fetchDebugJSON("/debug/state", &dump.State); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux debug dump: %v\n", err)
-		os.Exit(1)
+		exitFetchErr("wmux debug dump", err)
 	}
 	fetchDebugJSON("/debug/panics", &dump.Panics)
 	fetchDebugJSON("/debug/events/recent", &dump.Events)
@@ -197,7 +224,7 @@ func splitLines(s string) []string {
 func cmdDebugPprof(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "wmux debug pprof: want a profile kind — cpu, heap, or goroutine")
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	kind := args[0]
@@ -217,7 +244,7 @@ func cmdDebugPprof(args []string) {
 		profilePath = "/debug/pprof/goroutine"
 	default:
 		fmt.Fprintf(os.Stderr, "wmux debug pprof: unknown kind %q — want cpu, heap, or goroutine\n", kind)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	// Streaming client: a cpu profile blocks for the requested number of
@@ -225,7 +252,7 @@ func cmdDebugPprof(args []string) {
 	resp, err := daemonStream(profilePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux debug pprof: could not reach wmuxd: %v\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
