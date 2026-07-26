@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -111,6 +112,30 @@ func TestHandleDebugState(t *testing.T) {
 	}
 	if state.StartedAt.IsZero() {
 		t.Fatal("StartedAt should be set")
+	}
+}
+
+func TestHandleIdentify(t *testing.T) {
+	d := New("", "")
+	req := httptest.NewRequest(http.MethodGet, "/identify", nil)
+	rec := httptest.NewRecorder()
+	d.handleIdentify(rec, req)
+
+	var id proto.IdentifyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &id); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if id.App != "wmuxd" {
+		t.Errorf("App = %q, want wmuxd", id.App)
+	}
+	if id.Protocol != proto.ProtocolVersion {
+		t.Errorf("Protocol = %d, want %d (proto.ProtocolVersion)", id.Protocol, proto.ProtocolVersion)
+	}
+	if id.PID != os.Getpid() {
+		t.Errorf("PID = %d, want this test process's own pid %d", id.PID, os.Getpid())
+	}
+	if id.Sessions != 0 {
+		t.Errorf("Sessions = %d, want 0 for a fresh daemon", id.Sessions)
 	}
 }
 

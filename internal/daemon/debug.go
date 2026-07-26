@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -89,6 +90,21 @@ func (d *Daemon) recoverHandler(pattern string, h http.HandlerFunc) http.Handler
 		}()
 		h(w, r)
 	}
+}
+
+// handleIdentify answers who's listening on this port and what protocol it
+// speaks — see proto.IdentifyResponse. Deliberately not behind d.guard,
+// same reasoning as /healthz: it exists to be reachable when the token or
+// the protocol itself might be the problem, so a caller can name that
+// precisely instead of working backward from a bare 401.
+func (d *Daemon) handleIdentify(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(proto.IdentifyResponse{
+		App:      "wmuxd",
+		Version:  version.String(),
+		Protocol: proto.ProtocolVersion,
+		PID:      os.Getpid(),
+		Sessions: len(d.List()),
+	})
 }
 
 // handleDebugState reports the daemon's own runtime health — version,

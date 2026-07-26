@@ -77,12 +77,16 @@ func (d *Daemon) handler() http.Handler {
 	// tools in their own right.
 	registerPprof(mux, d.guard)
 
-	// /healthz is the sole exemption: it returns no data and mutates
-	// nothing, and `wmux update` depends on probing it across a version
-	// skew where the CLI may not have a token yet.
+	// /healthz and /identify are the sole exemptions from d.guard: /healthz
+	// returns no data and mutates nothing, and `wmux update` depends on
+	// probing it across a version skew where the CLI may not have a token
+	// yet. /identify exists specifically to be reachable when the token or
+	// the protocol itself is what's wrong (see handleIdentify) — gating it
+	// behind auth would defeat the point.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /identify", d.recoverHandler("GET /identify", d.handleIdentify))
 
 	return mux
 }

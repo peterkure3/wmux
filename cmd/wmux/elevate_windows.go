@@ -55,9 +55,9 @@ const (
 )
 
 var (
-	shell32               = syscall.NewLazyDLL("shell32.dll")
-	procShellExecuteExW   = shell32.NewProc("ShellExecuteExW")
-	elevatedWaitTimeout   = 3 * time.Minute // generous: this is a human clicking "Yes", not a computation
+	shell32             = syscall.NewLazyDLL("shell32.dll")
+	procShellExecuteExW = shell32.NewProc("ShellExecuteExW")
+	elevatedWaitTimeout = 3 * time.Minute // generous: this is a human clicking "Yes", not a computation
 )
 
 // runElevated re-launches this same wmux.exe with UAC consent (the "runas"

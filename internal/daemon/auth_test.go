@@ -140,13 +140,15 @@ func TestServeGuardsEveryMutatingRoute(t *testing.T) {
 		}
 	}
 
-	// /healthz is the one deliberate exemption.
-	resp, err := srv.Client().Get(srv.URL + "/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("/healthz: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	// /healthz and /identify are the deliberate exemptions.
+	for _, path := range []string{"/healthz", "/identify"} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
 	}
 }

@@ -4,6 +4,28 @@ package proto
 
 import "time"
 
+// ProtocolVersion is the wire-compatibility number for the local HTTP API.
+// It changes only when a message shape changes in a way an older or newer
+// peer cannot cope with — not on every release. GET /identify reports it so
+// a version-skewed wmux/wmuxd pair fails with an exact "protocol N vs M"
+// message instead of a bare, hard-to-place error — the real failure mode
+// that motivated this: an old wmux.exe got nothing but a bare 401 from a
+// new wmuxd.exe when the auth token scheme landed.
+const ProtocolVersion = 1
+
+// IdentifyResponse is the body of GET /identify. Unlike every other route,
+// /identify is exempt from token auth (see /healthz) — it exists
+// specifically to be reachable when something else about the connection is
+// wrong, so a client can name the actual problem instead of guessing from a
+// bare 401 or a JSON-decode failure against an unexpected server.
+type IdentifyResponse struct {
+	App      string `json:"app"` // "wmuxd" — guards against another process on 127.0.0.1:47823
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+	PID      int    `json:"pid"`
+	Sessions int    `json:"sessions"`
+}
+
 // NotifyEvent is raised whenever a session's output stream contains an
 // OSC 9 / OSC 99 / OSC 777 notification escape sequence. Body is always
 // the human-readable message; Title and Kind are set when the sequence
