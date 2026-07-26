@@ -231,6 +231,72 @@ func TestTuiKeyForwardedToFocusedSurfaceReachesDaemon(t *testing.T) {
 	}
 }
 
+// TestTuiFullOpenFlowEndToEnd drives the exact real user sequence — n,
+// type a cwd, enter, type a command, enter — running every returned
+// tea.Cmd for real (against a mock daemon) instead of just inspecting
+// state after one hop, the way the other tests here do. This is the gap
+// those left: a bug in the async openRequestMsg -> daemon call ->
+// paneOpenedMsg round trip wouldn't show up in a test that only calls
+// Update once and checks the immediate result.
+func TestTuiFullOpenFlowEndToEnd(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/identify", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(proto.IdentifyResponse{App: "wmuxd", Protocol: proto.ProtocolVersion})
+	})
+	mux.HandleFunc("/surfaces", func(w http.ResponseWriter, r *http.Request) {
+		var req proto.NewSurfaceRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(proto.SessionInfo{ID: req.ID, Cwd: req.Cwd, Surface: true})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	old := dc
+	dc = client.New(srv.URL, "test-tok")
+	defer func() { dc = old }()
+
+	m := newTestTuiModel()
+	m, _ = update(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	// runToQuiescence feeds msg through Update, then keeps running and
+	// re-feeding whatever Cmd comes back until nothing more is pending —
+	// exactly what bubbletea's real event loop does, just synchronous.
+	runToQuiescence := func(msg tea.Msg) {
+		var cmd tea.Cmd
+		m, cmd = update(m, msg)
+		for cmd != nil {
+			result := cmd()
+			if result == nil {
+				return
+			}
+			m, cmd = update(m, result)
+		}
+	}
+
+	runToQuiescence(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.sidebar.mode != modePromptCwd {
+		t.Fatalf("after n: sidebar mode = %v, want modePromptCwd", m.sidebar.mode)
+	}
+	runToQuiescence(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(".")})
+	runToQuiescence(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.sidebar.mode != modePromptCmd {
+		t.Fatalf("after cwd+enter: sidebar mode = %v, want modePromptCmd", m.sidebar.mode)
+	}
+	runToQuiescence(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("echo hi")})
+	runToQuiescence(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.panes) != 1 {
+		t.Fatalf("panes = %d, want 1 after completing the full n/cwd/cmd flow", len(m.panes))
+	}
+	leaves := m.layout.Leaves()
+	if len(leaves) != 2 {
+		t.Fatalf("layout leaves = %v, want sidebar + the new pane", leaves)
+	}
+	if m.focused == tuiSidebarLeafID {
+		t.Fatal("focus should have moved to the newly opened pane")
+	}
+}
+
 // TestTuiKeyGoesToSidebarWhenSidebarFocused is the other half of the
 // routing contract: with the sidebar focused, a key must reach the
 // sidebar's own Update (navigation), not any surface.
