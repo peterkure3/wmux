@@ -68,25 +68,6 @@ func TestPostJSONNonMatchingStatusIsStatusError(t *testing.T) {
 	}
 }
 
-func TestClaimPaneSpecRetryableViaStatusCode(t *testing.T) {
-	// Regression guard for the pane-exec claim loop: a 404 here must be
-	// distinguishable from every other failure by Code alone, without
-	// string-matching Error().
-	srv := mockDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	})
-	c := New(srv.URL, "tok")
-
-	_, err := c.ClaimPaneSpec("pending-session")
-	se, ok := err.(*StatusError)
-	if !ok {
-		t.Fatalf("error type = %T, want *StatusError", err)
-	}
-	if se.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (the claim loop's retry signal)", se.Code)
-	}
-}
-
 func TestNotifyAccepts202NotOK(t *testing.T) {
 	srv := mockDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

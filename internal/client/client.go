@@ -330,20 +330,6 @@ func (c *Client) Notify(evt proto.NotifyEvent) error {
 	return c.postJSON("/notify", evt, nil, http.StatusAccepted)
 }
 
-// FilePaneSpec is POST /panes/pending.
-func (c *Client) FilePaneSpec(spec proto.PaneSpec) error {
-	return c.postJSON("/panes/pending", spec, nil, http.StatusOK)
-}
-
-// ClaimPaneSpec is POST /panes/claim. A 404 here routinely means "not
-// filed yet" during `wmux pane-exec`'s claim retry loop — callers branch
-// on StatusError.Code rather than treating every error as fatal.
-func (c *Client) ClaimPaneSpec(id string) (proto.PaneSpec, error) {
-	var spec proto.PaneSpec
-	err := c.postJSON("/panes/claim", proto.ClaimPaneRequest{ID: id}, &spec, http.StatusOK)
-	return spec, err
-}
-
 // NewSurface is POST /surfaces — a daemon-owned ConPTY session.
 func (c *Client) NewSurface(req proto.NewSurfaceRequest) (proto.SessionInfo, error) {
 	var info proto.SessionInfo

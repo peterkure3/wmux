@@ -36,7 +36,7 @@ func sortedThemeNames() []string {
 // prints the theme that's currently active (env override or persisted
 // file, same resolution as currentSidebarTheme) and the full list; with a
 // name it validates against sidebarThemes and writes it to
-// themeConfigPath, taking effect on the next 'wmux sidebar' launch (the
+// themeConfigPath, taking effect on the next 'wmux tui' launch (the
 // running sidebar's colors are resolved once at its own startup, so an
 // already-open pane keeps its look until reopened).
 func cmdTheme(args []string) {
@@ -67,5 +67,5 @@ func cmdTheme(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux theme: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("theme set to %s — takes effect next 'wmux sidebar'\n", name)
+	fmt.Printf("theme set to %s — takes effect next 'wmux tui'\n", name)
 }

@@ -113,8 +113,6 @@ func TestServeGuardsEveryMutatingRoute(t *testing.T) {
 		{http.MethodGet, "/surfaces/attach"},
 		{http.MethodPost, "/surfaces/input"},
 		{http.MethodPost, "/surfaces/resize"},
-		{http.MethodPost, "/panes/pending"},
-		{http.MethodPost, "/panes/claim"},
 		{http.MethodPost, "/notify"},
 		{http.MethodGet, "/events"},
 		{http.MethodGet, "/debug/state"},

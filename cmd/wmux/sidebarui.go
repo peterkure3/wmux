@@ -1,18 +1,15 @@
-// wmux sidebar-ui is the TUI that runs inside the pane `wmux sidebar`
-// opens: a live, interactive list of every session the daemon knows about
-// (the cmux sidebar experience, inside Windows Terminal). It renders from
-// the daemon's typed /events push feed with a slow poll as fallback, and
-// drives the same focus/close/pane machinery the plain CLI commands use.
-// See docs/sidebar-design.md for the design of record.
+// sidebarModel is the live, interactive list of every session the daemon
+// knows about (the cmux sidebar experience) — embedded as one pane of
+// `wmux tui` (see tui.go), which is the only thing that constructs one
+// today. It renders from the daemon's typed /events push feed with a
+// slow poll as fallback, and drives enter/n/x through whichever
+// onFocus/onOpen/onClose hooks its embedder installed.
 package main
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -59,11 +56,11 @@ type sidebarModel struct {
 
 	events chan proto.Event
 
-	// onFocus/onOpen/onClose, when non-nil, replace the default
-	// wt.exe-driven actions (focusCmd/openPaneCmd/closeCmd) below — set by
-	// `wmux tui` to route enter/n/x through its own layout tree instead of
-	// spawning/moving wt.exe panes. nil (the default, what the standalone
-	// `wmux sidebar-ui` command uses) keeps today's exact behavior.
+	// onFocus/onOpen/onClose route enter/n/x — the embedder (only `wmux
+	// tui` today) installs these to place/focus/close panes in its own
+	// layout tree. A nil hook is a safe no-op, not a fallback to some
+	// other action — there's exactly one real caller now, and it always
+	// sets all three.
 	onFocus func(id string) tea.Cmd
 	onOpen  func(cwd, command string) tea.Cmd
 	onClose func(id string) tea.Cmd
@@ -75,25 +72,6 @@ type evtMsg proto.Event
 type tickMsg time.Time
 type daemonDownMsg struct{}
 type statusMsg string
-
-func cmdSidebarUI(args []string) {
-	home, _ := os.UserHomeDir()
-	m := sidebarModel{
-		unread:   map[string]unreadNote{},
-		daemonOK: true,
-		newCwd:   home,
-		ti:       textinput.New(),
-		help:     newHelpModel(),
-		events:   make(chan proto.Event, 32),
-	}
-	go sseListen(m.events)
-
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "wmux sidebar-ui: %v\n", err)
-		os.Exit(1)
-	}
-}
 
 // sseListen tails GET /events forever, reconnecting on any failure — the
 // model just consumes proto.Events off the channel and never worries about
@@ -139,46 +117,6 @@ func fetchSessionsCmd() tea.Msg {
 		return daemonDownMsg{}
 	}
 	return sessionsMsg(ss)
-}
-
-func focusCmd(id string) tea.Cmd {
-	return func() tea.Msg {
-		if err := focusSessionByID(id); err != nil {
-			return statusMsg(fmt.Sprintf("focus %s: %v", id, err))
-		}
-		return statusMsg("focused " + id)
-	}
-}
-
-func closeCmd(id string) tea.Cmd {
-	return func() tea.Msg {
-		if err := closeSession(id); err != nil {
-			return statusMsg(fmt.Sprintf("close %s: %v", id, err))
-		}
-		return statusMsg("closed " + id)
-	}
-}
-
-// openPaneCmd opens a new native agent pane next to the sidebar: nudge
-// focus right so the split lands in the agent area (a no-op when the
-// sidebar is the tab's only pane), then split with the shared wmux
-// profile flow. WSL-targeted panes stay a `wmux pane` CLI affair — the
-// prompt would need distro plumbing the two-line footer can't carry.
-func openPaneCmd(cwd, command string, sessions []proto.SessionInfo) tea.Cmd {
-	return func() tea.Msg {
-		id := uniquePaneID(filepath.Base(strings.TrimRight(cwd, `\/`)), sessions)
-		spec := proto.PaneSpec{ID: id, Cwd: cwd, Command: command, Native: true}
-		if err := filePaneSpec(spec); err != nil {
-			return statusMsg(fmt.Sprintf("new pane: %v", err))
-		}
-		exec.Command("wt.exe", "-w", "0", "move-focus", "right").Run()
-		wtArgs := []string{"-w", "0", "split-pane", "-V", "-s", "0.67",
-			"--title", id, "--suppressApplicationTitle", "--profile", "wmux"}
-		if err := exec.Command("wt.exe", wtArgs...).Start(); err != nil {
-			return statusMsg(fmt.Sprintf("new pane: wt.exe: %v", err))
-		}
-		return statusMsg("opened " + id)
-	}
 }
 
 // uniquePaneID appends -2, -3, ... while base collides with a session that
@@ -288,7 +226,7 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.onOpen != nil {
 				return m, m.onOpen(m.newCwd, val)
 			}
-			return m, openPaneCmd(m.newCwd, val, m.sessions)
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.ti, cmd = m.ti.Update(msg)
@@ -304,7 +242,7 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.onClose != nil {
 				return m, m.onClose(id)
 			}
-			return m, closeCmd(id)
+			return m, nil
 		default: // anything else cancels
 			m.mode = modeList
 			m.pendingID = ""
@@ -331,7 +269,6 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.onFocus != nil {
 				return m, m.onFocus(s.ID)
 			}
-			return m, focusCmd(s.ID)
 		}
 	case "x":
 		if s, ok := m.current(); ok && s.Running {
@@ -378,7 +315,9 @@ func (m sidebarModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.ensureVisible()
 			if s, ok := m.current(); ok {
 				delete(m.unread, s.ID)
-				return m, focusCmd(s.ID)
+				if m.onFocus != nil {
+					return m, m.onFocus(s.ID)
+				}
 			}
 		}
 	}

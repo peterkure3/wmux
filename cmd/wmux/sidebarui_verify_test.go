@@ -23,6 +23,14 @@ func newTestModel(w, h int) sidebarModel {
 		ti:     textinput.New(),
 		help:   newHelpModel(),
 		events: make(chan proto.Event, 1),
+		// Stub hooks, matching what the real embedder (wmux tui) always
+		// installs — these tests exercise the "does the right hook fire
+		// with the right args" contract, not any particular action.
+		onFocus: func(id string) tea.Cmd { return func() tea.Msg { return statusMsg("focus:" + id) } },
+		onOpen: func(cwd, command string) tea.Cmd {
+			return func() tea.Msg { return statusMsg("open:" + cwd + ":" + command) }
+		},
+		onClose: func(id string) tea.Cmd { return func() tea.Msg { return statusMsg("close:" + id) } },
 	}
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	return mm.(sidebarModel)
@@ -86,7 +94,7 @@ func TestSidebarPromptFlow(t *testing.T) {
 	}
 }
 
-func TestSidebarPromptEnterOpensPaneCmd(t *testing.T) {
+func TestSidebarPromptEnterCallsOnOpenHook(t *testing.T) {
 	m := newTestModel(30, 24)
 	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	m = mm.(sidebarModel)
@@ -100,7 +108,10 @@ func TestSidebarPromptEnterOpensPaneCmd(t *testing.T) {
 		t.Fatalf("after final enter: mode = %v, want modeList", m.mode)
 	}
 	if cmd == nil {
-		t.Fatal("expected openPaneCmd to be returned")
+		t.Fatal("expected onOpen's Cmd to be returned")
+	}
+	if got := cmd(); got != statusMsg("open:D:\\dev\\proj:claude") {
+		t.Fatalf("onOpen hook result = %v, want the cwd+command it was called with", got)
 	}
 }
 

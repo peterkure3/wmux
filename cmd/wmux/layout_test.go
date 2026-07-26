@@ -10,7 +10,7 @@ func TestLayoutSinglePaneFillsBounds(t *testing.T) {
 	}
 }
 
-// TestLayoutTwoPaneSideBySide matches cmdGrid's documented 2-pane layout
+// TestLayoutTwoPaneSideBySide matches wmux grid's former documented 2-pane layout
 // ([0 | 1]) — the tree this package builds must reproduce what wt.exe
 // used to lay out.
 func TestLayoutTwoPaneSideBySide(t *testing.T) {
@@ -29,7 +29,7 @@ func TestLayoutTwoPaneSideBySide(t *testing.T) {
 	}
 }
 
-// TestLayoutFourPaneGrid matches cmdGrid's documented 4-pane layout:
+// TestLayoutFourPaneGrid matches wmux grid's former documented 4-pane layout:
 //
 //	[0 | 1]
 //	[3 | 2]

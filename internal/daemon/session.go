@@ -89,10 +89,6 @@ type Daemon struct {
 	// the last notify it actually received (see publish).
 	subs map[chan proto.Event]*int
 
-	// panes holds pending pane specs (see panes.go) — the handshake between
-	// `wmux pane` and the `wmux pane-exec` process inside the new wt.exe pane.
-	panes paneSpecs
-
 	// statePath is where sessions are persisted between restarts; empty
 	// disables persistence entirely.
 	statePath string

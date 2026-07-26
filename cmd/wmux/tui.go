@@ -14,6 +14,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -113,6 +114,7 @@ func cmdTui(args []string) {
 	if *with != "" {
 		m.initOpen = &openRequestMsg{id: *id, cwd: *cwd, command: *with, distro: *distro, native: *native}
 	}
+	go sseListen(m.sidebar.events)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -383,6 +385,15 @@ func contentSize(r Rect) (int, int) {
 		h = 1
 	}
 	return w, h
+}
+
+// defaultPaneID derives a session ID from a working directory's base name.
+func defaultPaneID(cwd string) string {
+	base := filepath.Base(strings.TrimRight(cwd, `\/`))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "pane"
+	}
+	return base
 }
 
 func nextLeaf(leaves []string, current string) string {

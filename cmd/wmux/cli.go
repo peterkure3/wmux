@@ -54,26 +54,6 @@ type pruneCmd struct{ passArgs }
 
 func (c *pruneCmd) Run() error { cmdPrune(c.Args); return nil }
 
-type paneOpenCmd struct{ passArgs }
-
-func (c *paneOpenCmd) Run() error { cmdPane(c.Args); return nil }
-
-type gridCmd struct{ passArgs }
-
-func (c *gridCmd) Run() error { cmdGrid(c.Args); return nil }
-
-type panesListCmd struct{ passArgs }
-
-func (c *panesListCmd) Run() error { cmdPanes(c.Args); return nil }
-
-type paneFocusCmd struct{ passArgs }
-
-func (c *paneFocusCmd) Run() error { cmdFocus(c.Args); return nil }
-
-type sendKeysCmd struct{ passArgs }
-
-func (c *sendKeysCmd) Run() error { cmdSendKeys(c.Args); return nil }
-
 type surfaceNewCmd struct{ passArgs }
 
 func (c *surfaceNewCmd) Run() error { cmdSurface(c.Args); return nil }
@@ -114,14 +94,6 @@ type notifyCmd struct{ passArgs }
 
 func (c *notifyCmd) Run() error { cmdNotify(c.Args); return nil }
 
-type sidebarCmd struct{ passArgs }
-
-func (c *sidebarCmd) Run() error { cmdSidebar(c.Args); return nil }
-
-type sidebarUICmd struct{ passArgs }
-
-func (c *sidebarUICmd) Run() error { cmdSidebarUI(c.Args); return nil }
-
 type themeCmd struct{ passArgs }
 
 func (c *themeCmd) Run() error { cmdTheme(c.Args); return nil }
@@ -138,10 +110,6 @@ type tuiCmd struct{ passArgs }
 
 func (c *tuiCmd) Run() error { cmdTui(c.Args); return nil }
 
-type paneExecCmd struct{ passArgs }
-
-func (c *paneExecCmd) Run() error { cmdPaneExec(c.Args); return nil }
-
 type elevatedSchtasksCmd struct{ passArgs }
 
 func (c *elevatedSchtasksCmd) Run() error { cmdElevatedSchtasks(c.Args); return nil }
@@ -155,14 +123,6 @@ type sessionGroup struct {
 	List   listCmd         `cmd:"" help:"list sessions and their state"`
 	Prune  pruneCmd        `cmd:"" help:"remove all exited sessions from daemon state"`
 }
-
-// Note: unlike session/daemon below, pane-management (pane/grid/panes/
-// focus/send-keys) and surface (surface/connect) are NOT namespaced —
-// "pane" and "surface" are themselves existing flat command names (open
-// one pane; open one surface directly), so a "wmux pane {open,...}" or
-// "wmux surface {new,...}" group would collide with the exact token the
-// legacy leaf command already owns. Kept flat, unchanged, per the
-// "current flat names keep working" constraint this pass is scoped to.
 
 // daemonGroup is `wmux daemon {log,debug,update,autostart}` — wmuxd
 // itself, not any one session.
@@ -183,31 +143,18 @@ var cli struct {
 	Daemon  daemonGroup  `cmd:"" help:"wmuxd itself: log, debug, update, autostart"`
 	Hook    hookCmd      `cmd:"" help:"agent notification hooks: run <agent>, list"`
 
-	// Flat, unchanged — see the comment above daemonGroup for why these
-	// aren't namespaced too.
-	//
-	// (legacy) tag: Phase 4 of the refactor plan marks these as no longer
-	// the primary path now that `wmux tui` exists, but does NOT retire
-	// their supporting wt.exe/UIA machinery — pane/grid still need it to
-	// function, so it stays. Kept for the one case a multiplexer doesn't
-	// cover: driving a native agent in a real, standalone Windows
-	// Terminal pane.
-	Pane     paneOpenCmd   `cmd:"" help:"(legacy — see wmux tui) open a new wt.exe pane running a session"`
-	Grid     gridCmd       `cmd:"" help:"(legacy — see wmux tui) open 2-4 panes at once in one new tab"`
-	Panes    panesListCmd  `cmd:"" help:"(legacy — see wmux tui) list sessions with live console-window status"`
-	Focus    paneFocusCmd  `cmd:"" help:"(legacy — see wmux tui) bring a session's pane/tab into focus, or move focus by direction"`
-	SendKeys sendKeysCmd   `cmd:"" name:"send-keys" help:"(legacy — see wmux tui) inject keystrokes into a native session's console"`
-	Surface  surfaceNewCmd `cmd:"" help:"spawn CMD in a daemon-owned ConPTY (tmux-style, survives terminal close)"`
-	Connect  connectCmd    `cmd:"" help:"attach this terminal to a surface"`
+	// surface/connect are flat, unchanged — "surface" is itself an
+	// existing flat command name (open one surface directly), so a
+	// "wmux surface {new,...}" group would collide with the leaf command
+	// already there.
+	Surface surfaceNewCmd `cmd:"" help:"spawn CMD in a daemon-owned ConPTY (tmux-style, survives terminal close)"`
+	Connect connectCmd    `cmd:"" help:"attach this terminal to a surface"`
 
-	Notify    notifyCmd    `cmd:"" help:"manually push a notification (testing)"`
-	Sidebar   sidebarCmd   `cmd:"" help:"open the live session sidebar"`
-	Theme     themeCmd     `cmd:"" help:"print or persist the active sidebar theme"`
-	Watch     watchCmd     `cmd:"" help:"stream notifications as they arrive"`
-	TUI       tuiCmd       `cmd:"" name:"tui" help:"full-screen multi-pane multiplexer over daemon-owned surfaces"`
-	Version   versionCmd   `cmd:"" help:"print the wmux version"`
-	SidebarUI sidebarUICmd `cmd:"" name:"sidebar-ui" hidden:""`
-	PaneExec  paneExecCmd  `cmd:"" name:"pane-exec" hidden:""`
+	Notify  notifyCmd  `cmd:"" help:"manually push a notification (testing)"`
+	Theme   themeCmd   `cmd:"" help:"print or persist the active sidebar theme"`
+	Watch   watchCmd   `cmd:"" help:"stream notifications as they arrive"`
+	TUI     tuiCmd     `cmd:"" name:"tui" help:"full-screen multi-pane multiplexer over daemon-owned surfaces"`
+	Version versionCmd `cmd:"" help:"print the wmux version"`
 
 	HookClaude hookClaudeCmd `cmd:"" name:"hook-claude" help:"alias for 'wmux hook run claude' (reads stdin JSON)"`
 	HookCodex  hookCodexCmd  `cmd:"" name:"hook-codex" help:"alias for 'wmux hook run codex' (JSON as final arg)"`

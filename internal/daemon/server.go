@@ -62,8 +62,6 @@ func (d *Daemon) handler() http.Handler {
 	route("GET /surfaces/attach", d.handleSurfaceAttach)
 	route("POST /surfaces/input", d.handleSurfaceInput)
 	route("POST /surfaces/resize", d.handleSurfaceResize)
-	route("POST /panes/pending", d.handlePanePending)
-	route("POST /panes/claim", d.handlePaneClaim)
 	route("POST /notify", d.handleNotify)
 	route("GET /events", d.handleEvents)
 	route("GET /debug/state", d.handleDebugState)
@@ -181,37 +179,6 @@ func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 // `wmux prune`.
 func (d *Daemon) handlePrune(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(proto.PruneResult{Removed: d.Prune()})
-}
-
-// handlePanePending files a pane spec from `wmux pane`, to be claimed by
-// the `wmux pane-exec` process that starts inside the new wt.exe pane.
-func (d *Daemon) handlePanePending(w http.ResponseWriter, r *http.Request) {
-	var spec proto.PaneSpec
-	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if spec.ID == "" || spec.Command == "" {
-		http.Error(w, "pane spec needs id and command", http.StatusBadRequest)
-		return
-	}
-	d.AddPaneSpec(spec)
-	w.WriteHeader(http.StatusOK)
-}
-
-// handlePaneClaim hands a pending pane spec to the pane that will run it.
-func (d *Daemon) handlePaneClaim(w http.ResponseWriter, r *http.Request) {
-	var req proto.ClaimPaneRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	spec, err := d.ClaimPaneSpec(req.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(spec)
 }
 
 // handleNotify lets a CLI push a notification directly over HTTP, as an
