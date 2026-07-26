@@ -34,7 +34,7 @@ func cmdDebug(args []string) {
 	case "state":
 		cmdDebugState(args[1:])
 	case "panics":
-		cmdDebugPanics()
+		cmdDebugPanics(args[1:])
 	case "events":
 		cmdDebugEvents()
 	case "dump":
@@ -110,10 +110,18 @@ func cmdDebugState(args []string) {
 	}
 }
 
-func cmdDebugPanics() {
+func cmdDebugPanics(args []string) {
+	fs := newFlagSet("debug panics")
+	jsonOut := fs.Bool("json", false, "print recovered panics as a JSON array instead of a text report")
+	fs.Parse(args)
+
 	var panics []proto.PanicEntry
 	if err := fetchDebugJSON("/debug/panics", &panics); err != nil {
 		exitFetchErr("wmux debug panics", err)
+	}
+	if *jsonOut {
+		json.NewEncoder(os.Stdout).Encode(panics)
+		return
 	}
 	if len(panics) == 0 {
 		fmt.Println("no panics recovered since wmuxd started")

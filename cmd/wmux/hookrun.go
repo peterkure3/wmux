@@ -36,7 +36,15 @@ func cmdHook(args []string) {
 		}
 		runHook("hook run "+args[1], args[1], args[2:])
 	case "list":
-		for _, name := range agentprofile.List() {
+		fs := newFlagSet("hook list")
+		jsonOut := fs.Bool("json", false, "print known agent profile names as a JSON array")
+		fs.Parse(args[1:])
+		names := agentprofile.List()
+		if *jsonOut {
+			json.NewEncoder(os.Stdout).Encode(names)
+			return
+		}
+		for _, name := range names {
 			fmt.Println(name)
 		}
 	default:

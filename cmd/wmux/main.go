@@ -742,7 +742,7 @@ func cmdNew(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux new: could not parse daemon response: %v\nraw body: %s\n", err, string(bodyBytes))
 		os.Exit(1)
 	}
-	fmt.Printf("spawned session %s (cwd=%s)\n", info.ID, info.Cwd)
+	fmt.Println(info.ID)
 }
 
 // cmdClose kills a session's tracked process (daemon-owned for `wmux new`,
@@ -764,14 +764,12 @@ func cmdClose(args []string) {
 
 	err := closeSession(*id)
 	if err == nil {
-		fmt.Printf("closed session %s (a pane opened by wmux pane closes itself)\n", *id)
-		return
+		return // silent on success, per the mutate-commands-print-nothing convention
 	}
 	// Unknown locally: a WSL-path pane session only ever registered with
 	// the WSL-resident daemon (see bridge.go) — try there before failing.
 	if errors.Is(err, errSessionNotFound) {
 		if werr := wslDaemonClose(*id); werr == nil {
-			fmt.Printf("closed session %s on the WSL daemon (a pane opened by wmux pane closes itself)\n", *id)
 			return
 		}
 	}
@@ -847,6 +845,10 @@ func cmdList(args []string) {
 // after exit on purpose (`wmux list` shows last known state), but they
 // accumulate forever otherwise — this is the manual cleanup.
 func cmdPrune(args []string) {
+	fs := newFlagSet("prune")
+	jsonOut := fs.Bool("json", false, "print the removed session IDs as a JSON array instead of one per line")
+	fs.Parse(args)
+
 	resp, err := daemonPost("/sessions/prune", "application/json", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wmux prune: could not reach wmuxd: %v\n", err)
@@ -863,12 +865,14 @@ func cmdPrune(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux prune: could not parse daemon response: %v\n", err)
 		os.Exit(1)
 	}
-	if len(result.Removed) == 0 {
-		fmt.Println("nothing to prune (no exited sessions)")
+	sort.Strings(result.Removed)
+	if *jsonOut {
+		json.NewEncoder(os.Stdout).Encode(result.Removed)
 		return
 	}
-	sort.Strings(result.Removed)
-	fmt.Printf("pruned %d exited session(s): %s\n", len(result.Removed), strings.Join(result.Removed, ", "))
+	for _, id := range result.Removed {
+		fmt.Println(id)
+	}
 }
 
 // cmdWatch tails /events and prints notifications as they arrive — a

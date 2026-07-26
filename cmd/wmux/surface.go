@@ -63,8 +63,8 @@ func cmdSurface(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux surface: could not parse daemon response: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("created surface %s (cwd=%s) — view it with: wmux connect --id %s\n",
-		info.ID, info.Cwd, info.ID)
+	fmt.Fprintf(os.Stderr, "view it with: wmux connect --id %s\n", info.ID)
+	fmt.Println(info.ID)
 }
 
 // cmdConnect attaches this terminal to a surface session: the daemon
