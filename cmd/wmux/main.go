@@ -63,13 +63,16 @@ func usage() {
                                           spawn CMD in a daemon-owned ConPTY (real TTY, runs headless,
                                           survives terminal close — tmux-style)
   wmux connect --id ID                   attach this terminal to a surface (Ctrl-] detaches, session keeps running)
+  wmux tui [--with CMD --cwd PATH [--id ID] [--native] [--distro D]]
+                                          full-screen multi-pane multiplexer over daemon-owned surfaces —
+                                          the primary way to run multiple sessions now; see 'wmux tui -h'
   wmux pane --id ID --cwd PATH --distro D --cmd CMD [--split right|down|tab]
-                                          open a new wt.exe pane running 'wmux attach' inside WSL
+                                          (legacy — see wmux tui) open a new wt.exe pane running 'wmux attach' inside WSL
   wmux pane --native --id ID --cwd PATH --cmd CMD [--split right|down|tab]
-                                          same, but runs CMD directly on Windows, no WSL
+                                          (legacy — see wmux tui) same, but runs CMD directly on Windows, no WSL
   wmux grid --ids A,B[,C[,D]] --cwd PATH --cmd CMD [--native] [--distro D]
-                                          open 2-4 panes at once in one new tab (equal splits),
-                                          each running CMD as its own session
+                                          (legacy — see wmux tui) open 2-4 panes at once in one new tab
+                                          (equal splits), each running CMD as its own session
   wmux sidebar [--bare]                  open the live session sidebar (~20% wide) plus a default shell pane;
                                           --bare opens only the sidebar
   wmux sidebar --with CMD --cwd PATH [--id ID] [--native] [--distro D]
@@ -87,8 +90,8 @@ func usage() {
                                           inspect wmuxd's own runtime state — session table,
                                           recovered panics, recent events, a bug-report bundle
                                           ('dump'), or a pprof profile written to disk
-  wmux focus --id ID                     bring a session's wt.exe pane/tab into focus
-  wmux focus --dir left|right|up|down    move pane focus within the current wt.exe window
+  wmux focus --id ID                     (legacy — see wmux tui) bring a session's wt.exe pane/tab into focus
+  wmux focus --dir left|right|up|down    (legacy — see wmux tui) move pane focus within the current wt.exe window
   wmux close --id ID                     kill a session's tracked process (a wmux pane closes itself too)
   wmux list                              list sessions and their state
   wmux prune                             remove all exited sessions from daemon state
@@ -100,8 +103,9 @@ func usage() {
                                           (refuses while live surfaces exist unless --kill-surfaces)
   wmux autostart install|uninstall|status
                                           register/remove wmuxd as a Task Scheduler logon task
-  wmux panes                              list sessions with live console-window status (introspection wt.exe has no API for)
-  wmux send-keys --id ID -- KEYS...       inject keystrokes into a native session's console (e.g. Enter, "Ctrl c", literal text)
+  wmux panes                              (legacy — see wmux tui) list sessions with live console-window status
+  wmux send-keys --id ID -- KEYS...       (legacy — see wmux tui) inject keystrokes into a native session's console
+                                          (e.g. Enter, "Ctrl c", literal text)
   wmux version                           print the wmux version
 
   --cmd - (also --with -) reads the command from stdin instead — use for

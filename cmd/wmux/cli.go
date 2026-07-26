@@ -185,11 +185,18 @@ var cli struct {
 
 	// Flat, unchanged — see the comment above daemonGroup for why these
 	// aren't namespaced too.
-	Pane     paneOpenCmd   `cmd:"" help:"open a new wt.exe pane running a session"`
-	Grid     gridCmd       `cmd:"" help:"open 2-4 panes at once in one new tab"`
-	Panes    panesListCmd  `cmd:"" help:"list sessions with live console-window status"`
-	Focus    paneFocusCmd  `cmd:"" help:"bring a session's pane/tab into focus, or move focus by direction"`
-	SendKeys sendKeysCmd   `cmd:"" name:"send-keys" help:"inject keystrokes into a native session's console"`
+	//
+	// (legacy) tag: Phase 4 of the refactor plan marks these as no longer
+	// the primary path now that `wmux tui` exists, but does NOT retire
+	// their supporting wt.exe/UIA machinery — pane/grid still need it to
+	// function, so it stays. Kept for the one case a multiplexer doesn't
+	// cover: driving a native agent in a real, standalone Windows
+	// Terminal pane.
+	Pane     paneOpenCmd   `cmd:"" help:"(legacy — see wmux tui) open a new wt.exe pane running a session"`
+	Grid     gridCmd       `cmd:"" help:"(legacy — see wmux tui) open 2-4 panes at once in one new tab"`
+	Panes    panesListCmd  `cmd:"" help:"(legacy — see wmux tui) list sessions with live console-window status"`
+	Focus    paneFocusCmd  `cmd:"" help:"(legacy — see wmux tui) bring a session's pane/tab into focus, or move focus by direction"`
+	SendKeys sendKeysCmd   `cmd:"" name:"send-keys" help:"(legacy — see wmux tui) inject keystrokes into a native session's console"`
 	Surface  surfaceNewCmd `cmd:"" help:"spawn CMD in a daemon-owned ConPTY (tmux-style, survives terminal close)"`
 	Connect  connectCmd    `cmd:"" help:"attach this terminal to a surface"`
 
