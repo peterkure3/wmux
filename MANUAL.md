@@ -175,44 +175,28 @@ notify = ["wmux", "hook-codex", "--session", "my-project"]
 
 ## Running an agent session
 
+The fastest way in is the multiplexer — see the next section. These are
+the one-shot forms for when you want a single session, or a scripted one.
+
 ### Example: native Windows Claude Code, in your current terminal
 
 ```powershell
-wmux attach --id my-project --cwd D:\path\to\project -- "C:\Users\you\.local\bin\claude.exe"
+wmux attach "C:\Users\you\.local\bin\claude.exe"
 ```
 
 Runs `claude.exe` right there with a real TTY (colors, readline, prompts
-all work normally) while registering the session with the daemon under
-the id `my-project`. When you exit Claude, it deregisters automatically.
-
-### Example: native Windows Claude Code, in a new Windows Terminal pane
-
-```powershell
-wmux pane --native --id my-project --cwd D:\path\to\project --cmd "C:\Users\you\.local\bin\claude.exe" --split right
-```
-
-Opens a new side-by-side split running the same thing. `--split` also
-takes `down` (stacked split) or `tab` (new tab, the default if you omit
-`--split`).
-
-(`wt.exe`'s own `-V`/`-H` flags name a split after the orientation of the
-*dividing line*, which is backwards from what most people mean by
-"vertical"/"horizontal" — verified by screenshot that `-V` actually
-produces left/right, not top/bottom. `wmux pane` uses `right`/`down`
-instead to sidestep that confusion entirely.)
+all work normally) while registering the session with the daemon. The id
+defaults to the current directory's name; pass `--id my-project` to
+choose it. When you exit Claude, it deregisters automatically.
 
 **Gotcha:** if the exe path has a space in it (a common case — usernames
-like `Peter Kure` do this), don't wrap it in embedded double quotes
-inside `--cmd`. PowerShell 5.1 has a known bug marshalling arguments with
-literal embedded `"` to native programs, and it can silently swallow
-trailing flags like `--split`. Instead, use the path's 8.3 short form,
-which has no spaces and needs no quoting:
+like `Peter Kure` do this), PowerShell 5.1 has a known bug marshalling
+arguments with literal embedded `"` to native programs, and it can
+silently swallow trailing flags. Use the path's 8.3 short form, which has
+no spaces and needs no quoting:
 ```powershell
 (New-Object -ComObject Scripting.FileSystemObject).GetFile("C:\Users\you\.local\bin\claude.exe").ShortPath
 # -> C:\Users\PETERK~1\LOCAL~1\bin\claude.exe
-```
-```powershell
-wmux pane --native --id my-project --cwd D:\path\to\project --cmd "C:\Users\PETERK~1\LOCAL~1\bin\claude.exe" --split right
 ```
 
 ### Example: WSL-based Codex, headless (batch run, no TTY)
@@ -232,24 +216,58 @@ wmux new --id nightly-refactor --cwd /home/you/my-project --cmd "codex exec '...
 ### Example: WSL-based Claude Code, interactive
 
 ```bash
-wmux attach --id my-project --cwd /home/you/my-project -- claude
+wmux attach claude
 ```
 
-### Example: WSL-based Claude Code, new Windows Terminal pane
+### Example: a session that outlives its terminal
 
-```powershell
-wmux pane --id my-project --cwd /home/you/my-project --cmd claude --split right
+```bash
+wmux surface claude     # spawn it into a daemon-owned ConPTY, headless
+wmux connect            # view and control it here; Ctrl-] detaches
 ```
 
-Note: no `--native` here — that flag is specifically for the Windows
-path. Plain `wmux pane` always launches inside WSL via `wsl.exe`.
+The agent keeps running when you close the terminal. Reconnect any time
+with `wmux connect` (it picks the only running surface, or name one).
 
-`--cmd` can be a compound command (semicolons, pipes) and it'll still
-work correctly — the underlying quoting through `wt.exe` is handled for
-you:
-```powershell
-wmux pane --id build-and-run --cwd /home/you/my-project --cmd "npm install; npm run dev" --split down
+## The multiplexer
+
 ```
+wmux                      # session list; open panes from there with n
+wmux claude               # open it with one pane already running claude
+wmux grid 4               # four panes in a 2x2 grid
+wmux grid 4 --claude      # the same grid, every pane running claude
+wmux grid 3 --codex       # three panes: two over one, all running codex
+```
+
+Panes are `wmux surface` sessions, drawn by wmux itself — no Windows
+Terminal splits, so this behaves the same on Windows, in WSL, and on
+Linux. `wmux grid N` takes any N from 1 to 16. The agent flags are the
+same set `wmux hook run` knows (`--claude`, `--codex`, `--kimi`,
+`--kiro`, `--mimo`, `--agy`); `--agent NAME` and `--cmd CMD` also work,
+and with none of them the panes are shells.
+
+**Keys.** `ctrl+o` cycles panes and clicking focuses the pane under the
+cursor, both without changing mode. `ctrl+b` switches to COMMAND mode,
+which is sticky (unlike tmux's one-shot prefix) — the footer shows which
+mode you're in.
+
+| COMMAND key | does |
+| --- | --- |
+| `\|` / `v` | split the focused pane side by side |
+| `-` / `s` | split the focused pane stacked |
+| `n` | new pane, same axis as last time |
+| `x` | close the focused pane |
+| `tab`, arrows / `hjkl` | cycle / move focus |
+| `b` | show or hide the sidebar |
+| `g` | snap every pane into a balanced grid |
+| `esc` / `i` | back to INSERT (typing at the pane) |
+| `q` | quit |
+
+Splitting hands off to the sidebar's own cwd/command prompt, so `ctrl+b`
+`-`, a directory, and a command is the whole flow for a new pane.
+
+`wmux theme midnight|frost|gradient` picks the color scheme; it applies
+on the next launch.
 
 ## Watching for notifications
 
@@ -305,36 +323,30 @@ exit code.
 
 To end it remotely instead of from inside the session:
 ```
-wmux close --id my-project
+wmux close                # the only running session
+wmux close my-project     # ...or name one
 ```
 Kills the session's tracked process — the daemon-owned process for
-`wmux new`, or the registered PID for `wmux attach`/`wmux pane`.
+`wmux new`/`wmux surface`, or the registered PID for `wmux attach`.
 Verified: this kills the real OS process (confirmed via process list,
-not just daemon state) and deregisters the session immediately.
+not just daemon state) and deregisters the session immediately. With
+several sessions running and no ID given, it lists them rather than
+guessing.
 
-**If you opened it via `wmux pane`:** ending the process (whether by
-exiting the agent yourself or via `wmux close`) also removes the pane
-itself from Windows Terminal's layout — `wmux pane` opens every pane on
-an auto-installed `wmux` WT profile with `closeOnExit: "always"`, whose
-fixed commandline (`wmux pane-exec`) owns the pane's whole process
-chain. (Panes opened by pre-profile wmux versions passed the commandline
-straight through `wt.exe`, which never honors `closeOnExit` — those
-still linger as inert panes and can only be closed by hand.)
+Inside the multiplexer, `ctrl+b` `x` does the same to the focused pane
+and removes it from the layout.
 
 ## Switching focus
 
-```
-wmux focus --id my-project     # focus that session's pane/tab, wherever it is
-wmux focus --dir right         # move focus one pane right in the current window
-```
+Focus lives inside the multiplexer, and there are three ways to move it:
 
-Run from the Windows side, like `wmux pane`. `--id` finds the pane by
-its title — every `wmux pane` keeps the session ID as its fixed pane
-title — via UI Automation: it foregrounds the right Windows Terminal
-window, selects the tab, and puts keyboard focus on the exact pane,
-including one half of a split. `--dir` is relative movement
-(`left`/`right`/`up`/`down`) within the most recently used WT window —
-handy for an agent that just opened a pane next to itself.
+- **Click** the pane (or the sidebar) you want.
+- **`ctrl+o`** cycles through panes in reading order.
+- **`ctrl+b`** then `tab`, an arrow key, or `hjkl` — `tab` cycles, the
+  direction keys move to the pane geometrically that way.
+
+The sidebar lists every session the daemon knows about; `enter` on one
+focuses its pane if it is open in this multiplexer.
 
 ## Troubleshooting
 
@@ -342,10 +354,9 @@ handy for an agent that just opened a pane next to itself.
 |---|---|---|
 | Session exits instantly, no output (WSL commands) | Bad or missing `--distro` | `wsl -l -v` to see real distro names; omit `--distro` to use your default, or pass the correct name |
 | `wmux hook-claude`/`hook-codex` says "could not reach wmuxd" | Hook wired to the wrong side | A native Windows agent's hook needs a native `wmuxd`; a WSL agent's hook needs a WSL-resident `wmuxd` — they're on separate network namespaces unless WSL2 mirrored networking is on |
-| `wmux pane` opens a window but the session never shows in `wmux list` | `wmux` not on PATH inside the target WSL distro, or `wmuxd` isn't running there | `wsl -d <distro> -- which wmux`; start `wmuxd` inside the distro |
-| `wmux pane --native --cmd "..."` seems to drop a trailing flag like `--split` | PowerShell 5.1 embedded-quote bug (see the gotcha above) | Use the 8.3 short path instead of a quoted long path |
+| A pane opens but the session never shows in `wmux list` | `wmux` not on PATH inside the target WSL distro, or `wmuxd` isn't running there | `wsl -d <distro> -- which wmux`; start `wmuxd` inside the distro |
+| A quoted native path seems to drop a trailing flag | PowerShell 5.1 embedded-quote bug (see the gotcha above) | Use the 8.3 short path instead of a quoted long path |
 | `wmux notify ... ` doesn't show up against the right session in `wmux list` | Forgot `--session` | Add `--session <id>` |
-| `wmux close --id X` succeeds but the pane/tab is still visible | Pane opened by a pre-profile wmux version (commandline passed through `wt.exe` never honors `closeOnExit`) | Close that pane by hand; panes opened by current `wmux pane` close themselves |
-| `wmux pane` opens a plain shell instead of the agent | The `wmux` WT profile fragment wasn't imported yet (first-ever run; WT normally imports it live after `wmux pane` touches settings.json) | Retry `wmux pane`; if it persists, restart Windows Terminal once |
-| `wmux focus --id X` says not found | Pane title no longer matches the session ID (pane opened by an old wmux version without `--suppressApplicationTitle`, or session not opened via `wmux pane`) | Use `wmux focus --dir` instead, or reopen the pane with current `wmux pane` |
-| Complex `--cmd` garbled or exits with a bash syntax error | Quoting mangled crossing Git Bash / PowerShell / `wsl.exe` (`$()`, quotes, `;`) | Pipe it instead: `printf '%s' "$CMD" \| wmux surface ... --cmd -` (stdin bypasses every quoting layer); or put it in a script and `--cmd 'bash script.sh'` |
+| `wmux grid 4 --claude` opens shells, not claude | An old wmux build (the count used to swallow the flags after it) | `wmux update`; `wmux version` to confirm |
+| Panes render but keys do nothing | You are in COMMAND mode | Look at the footer; press `esc` or `i` to get back to INSERT |
+| Complex `--cmd` garbled or exits with a bash syntax error | Quoting mangled crossing Git Bash / PowerShell / `wsl.exe` (`$()`, quotes, `;`) | Pipe it instead: `printf '%s' "$CMD" \| wmux surface --cmd -` (stdin bypasses every quoting layer); or put it in a script and `--cmd 'bash script.sh'` |

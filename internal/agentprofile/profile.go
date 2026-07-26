@@ -66,6 +66,20 @@ type Profile struct {
 	// and both payload fields come up empty: "getwd" uses the current
 	// working directory (Codex behavior); "" leaves the session empty.
 	SessionFallback string `toml:"session_fallback"`
+
+	// LaunchCommand is the shell command that starts this agent, used by
+	// `wmux grid N --<agent>` to fill panes. Empty means "the profile
+	// name" — true for every agent so far, since each ships a CLI named
+	// after itself.
+	LaunchCommand string `toml:"launch_command"`
+}
+
+// Command returns the command line that starts this agent.
+func (p *Profile) Command() string {
+	if p.LaunchCommand != "" {
+		return p.LaunchCommand
+	}
+	return p.Name
 }
 
 const (
