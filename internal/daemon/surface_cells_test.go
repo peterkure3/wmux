@@ -177,9 +177,21 @@ func TestBroadcastCellsUpdateSkipsWorkWithNoClients(t *testing.T) {
 // Windows this runs natively via cmd.exe (no WSL dependency); elsewhere
 // buildSurfaceCommand always goes through bash regardless of Native.
 func TestSpawnSurfaceCellsAttachEndToEnd(t *testing.T) {
+	// A bare "echo hi" can exit before this test's client even finishes
+	// attaching — cmd.exe/bash both return fast enough that the process
+	// exit and the pty reader draining "hi" become a genuine race (a
+	// process exiting is not a guarantee its last output already reached
+	// a concurrent reader). The trailing delay sidesteps that race
+	// instead of asserting on it: "hi" only has to be observable at some
+	// point *before* the delay ends, well clear of the exit itself.
+	command := "echo hi && sleep 1"
+	if runtime.GOOS == "windows" {
+		command = "echo hi && ping -n 2 127.0.0.1 >nul"
+	}
+
 	d := New("", "")
 	req := proto.NewSurfaceRequest{
-		ID: "cellstest", Cwd: t.TempDir(), Command: "echo hi",
+		ID: "cellstest", Cwd: t.TempDir(), Command: command,
 		Native: runtime.GOOS == "windows", Cols: 40, Rows: 10,
 	}
 	if _, err := d.SpawnSurface(req); err != nil {
@@ -201,18 +213,29 @@ func TestSpawnSurfaceCellsAttachEndToEnd(t *testing.T) {
 		t.Fatalf("replay rows = %d, want 10", len(first.Rows))
 	}
 
+	// `echo hi` can complete before this goroutine even reaches
+	// AttachSurfaceCells — cmd.exe is fast enough that "hi" regularly
+	// lands in the replay frame itself rather than a later update, so
+	// the replay has to be scanned too, not just what follows it.
+	containsHi := func(f proto.CellsFrame) bool {
+		for _, row := range f.Rows {
+			for _, run := range row.Runs {
+				if strings.Contains(run.Text, "hi") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	deadline := time.After(5 * time.Second)
-	sawHi := false
+	sawHi := containsHi(first)
 loop:
 	for {
 		select {
 		case frame := <-ch:
-			for _, row := range frame.Rows {
-				for _, run := range row.Runs {
-					if strings.Contains(run.Text, "hi") {
-						sawHi = true
-					}
-				}
+			if containsHi(frame) {
+				sawHi = true
 			}
 			if frame.Type == proto.CellsExit {
 				break loop
