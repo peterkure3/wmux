@@ -87,6 +87,8 @@ func main() {
 		cmdUpdate(os.Args[2:])
 	case "autostart":
 		cmdAutostart(os.Args[2:])
+	case "__elevated-schtasks": // hidden: see runElevated in elevate_windows.go
+		cmdElevatedSchtasks(os.Args[2:])
 	case "panes":
 		cmdPanes(os.Args[2:])
 	case "send-keys":
