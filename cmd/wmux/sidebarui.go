@@ -58,6 +58,15 @@ type sidebarModel struct {
 	help      help.Model
 
 	events chan proto.Event
+
+	// onFocus/onOpen/onClose, when non-nil, replace the default
+	// wt.exe-driven actions (focusCmd/openPaneCmd/closeCmd) below — set by
+	// `wmux tui` to route enter/n/x through its own layout tree instead of
+	// spawning/moving wt.exe panes. nil (the default, what the standalone
+	// `wmux sidebar-ui` command uses) keeps today's exact behavior.
+	onFocus func(id string) tea.Cmd
+	onOpen  func(cwd, command string) tea.Cmd
+	onClose func(id string) tea.Cmd
 }
 
 // messages
@@ -268,6 +277,9 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeList
 			m.ti.Blur()
 			if val != "" {
+				if m.onOpen != nil {
+					return m, m.onOpen(m.newCwd, val)
+				}
 				return m, openPaneCmd(m.newCwd, val, m.sessions)
 			}
 			return m, nil
@@ -283,6 +295,9 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			id := m.pendingID
 			m.mode = modeList
 			m.pendingID = ""
+			if m.onClose != nil {
+				return m, m.onClose(id)
+			}
 			return m, closeCmd(id)
 		default: // anything else cancels
 			m.mode = modeList
@@ -307,6 +322,9 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if s, ok := m.current(); ok {
 			delete(m.unread, s.ID)
+			if m.onFocus != nil {
+				return m, m.onFocus(s.ID)
+			}
 			return m, focusCmd(s.ID)
 		}
 	case "x":

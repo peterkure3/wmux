@@ -134,6 +134,10 @@ type versionCmd struct{ passArgs }
 
 func (c *versionCmd) Run() error { cmdVersion(c.Args); return nil }
 
+type tuiCmd struct{ passArgs }
+
+func (c *tuiCmd) Run() error { cmdTui(c.Args); return nil }
+
 type paneExecCmd struct{ passArgs }
 
 func (c *paneExecCmd) Run() error { cmdPaneExec(c.Args); return nil }
@@ -193,6 +197,7 @@ var cli struct {
 	Sidebar   sidebarCmd   `cmd:"" help:"open the live session sidebar"`
 	Theme     themeCmd     `cmd:"" help:"print or persist the active sidebar theme"`
 	Watch     watchCmd     `cmd:"" help:"stream notifications as they arrive"`
+	TUI       tuiCmd       `cmd:"" name:"tui" help:"full-screen multi-pane multiplexer over daemon-owned surfaces"`
 	Version   versionCmd   `cmd:"" help:"print the wmux version"`
 	SidebarUI sidebarUICmd `cmd:"" name:"sidebar-ui" hidden:""`
 	PaneExec  paneExecCmd  `cmd:"" name:"pane-exec" hidden:""`
