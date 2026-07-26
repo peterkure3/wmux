@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/peterkure3/wmux/internal/authtoken"
 	"github.com/peterkure3/wmux/internal/client"
@@ -34,9 +35,24 @@ var daemonToken = func() string {
 	return tok
 }()
 
-// dc is the shared client every daemon-talking command in this package
-// goes through.
-var dc = client.New(daemonAddr, daemonToken)
+// dcState backs dc()/setDC() — the shared client every daemon-talking
+// command in this package goes through, behind an atomic.Pointer rather
+// than a plain package var. Production code never reassigns it after
+// startup, but tests do (pointing it at a mock server), and a background
+// goroutine started by an earlier test (e.g. a leaked tui.go surface
+// attach) can still be reading it when a later test swaps it out from
+// under it — a real data race -race caught, not a hypothetical one.
+var dcState atomic.Pointer[client.Client]
+
+func init() {
+	dcState.Store(client.New(daemonAddr, daemonToken))
+}
+
+// dc returns the current shared daemon client.
+func dc() *client.Client { return dcState.Load() }
+
+// setDC replaces the shared daemon client — tests only.
+func setDC(c *client.Client) { dcState.Store(c) }
 
 // exitOnProtocolError turns a *client.ProtocolError into the CLI's own
 // policy for it — print the precise message and exit 3 — so callers of
@@ -54,21 +70,21 @@ func exitOnProtocolError(err error) {
 // daemonPost replaces http.Post for daemon endpoints. path is the leading
 // "/..." only; daemonAddr is prepended.
 func daemonPost(path, contentType string, body io.Reader) (*http.Response, error) {
-	resp, err := dc.Post(path, contentType, body)
+	resp, err := dc().Post(path, contentType, body)
 	exitOnProtocolError(err)
 	return resp, err
 }
 
 // daemonGet replaces http.Get for daemon endpoints.
 func daemonGet(path string) (*http.Response, error) {
-	resp, err := dc.Get(path)
+	resp, err := dc().Get(path)
 	exitOnProtocolError(err)
 	return resp, err
 }
 
 // daemonStream is daemonGet for endpoints that stay open indefinitely.
 func daemonStream(path string) (*http.Response, error) {
-	resp, err := dc.Stream(path)
+	resp, err := dc().Stream(path)
 	exitOnProtocolError(err)
 	return resp, err
 }
@@ -77,7 +93,7 @@ func daemonStream(path string) (*http.Response, error) {
 // drives itself — used where a cancellable context has to own the
 // connection's lifetime (wmux connect's detach path).
 func daemonStreamRequest(req *http.Request) (*http.Response, error) {
-	resp, err := dc.StreamRequest(req)
+	resp, err := dc().StreamRequest(req)
 	exitOnProtocolError(err)
 	return resp, err
 }

@@ -235,7 +235,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	id := m.focused
-	return m, func() tea.Msg { dc.InputSurface(id, b); return nil } //nolint:errcheck // best-effort; a dead surface just stops responding
+	return m, func() tea.Msg { dc().InputSurface(id, b); return nil } //nolint:errcheck // best-effort; a dead surface just stops responding
 }
 
 func (m tuiModel) handlePrefixedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -246,7 +246,7 @@ func (m tuiModel) handlePrefixedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focused != tuiSidebarLeafID {
 			if p, ok := m.panes[m.focused]; ok && !p.exited {
 				id := m.focused
-				return m, func() tea.Msg { dc.InputSurface(id, []byte{2}); return nil } //nolint:errcheck
+				return m, func() tea.Msg { dc().InputSurface(id, []byte{2}); return nil } //nolint:errcheck
 			}
 		}
 		return m, nil
@@ -349,7 +349,7 @@ func (m tuiModel) openSurfaceCmd(id, cwd, command, distro string, native bool) t
 		if id == "" {
 			id = uniquePaneID(defaultPaneID(cwd), m.sidebar.sessions)
 		}
-		info, err := dc.NewSurface(proto.NewSurfaceRequest{
+		info, err := dc().NewSurface(proto.NewSurfaceRequest{
 			ID: id, Cwd: cwd, Command: command, Distro: distro, Native: native,
 		})
 		if err != nil {
@@ -362,14 +362,14 @@ func (m tuiModel) openSurfaceCmd(id, cwd, command, distro string, native bool) t
 func resizeSurfaceCmd(id string, cols, rows int) tea.Cmd {
 	return func() tea.Msg {
 		if cols >= 2 && rows >= 2 {
-			dc.ResizeSurface(id, cols, rows) //nolint:errcheck // best-effort; a dead surface just ignores it
+			dc().ResizeSurface(id, cols, rows) //nolint:errcheck // best-effort; a dead surface just ignores it
 		}
 		return nil
 	}
 }
 
 func closeSurfaceCmd(id string) tea.Cmd {
-	return func() tea.Msg { dc.CloseSession(id); return nil } //nolint:errcheck // best-effort
+	return func() tea.Msg { dc().CloseSession(id); return nil } //nolint:errcheck // best-effort
 }
 
 // contentSize is a pane's usable interior after its 1-cell border on

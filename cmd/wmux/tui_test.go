@@ -211,9 +211,9 @@ func TestTuiKeyForwardedToFocusedSurfaceReachesDaemon(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	old := dc
-	dc = client.New(srv.URL, "test-tok")
-	defer func() { dc = old }()
+	old := dc()
+	setDC(client.New(srv.URL, "test-tok"))
+	defer func() { setDC(old) }()
 
 	m := newTestTuiModel()
 	m, _ = update(m, tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -251,9 +251,9 @@ func TestTuiFullOpenFlowEndToEnd(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	old := dc
-	dc = client.New(srv.URL, "test-tok")
-	defer func() { dc = old }()
+	old := dc()
+	setDC(client.New(srv.URL, "test-tok"))
+	defer func() { setDC(old) }()
 
 	m := newTestTuiModel()
 	m, _ = update(m, tea.WindowSizeMsg{Width: 100, Height: 40})
