@@ -1,31 +1,25 @@
-// Daemon HTTP plumbing for the CLI.
+// Daemon HTTP plumbing for the CLI: a thin adapter from the free-standing
+// functions every command in this package already calls (daemonGet,
+// daemonPost, ...) onto internal/client.Client, which owns the actual
+// HTTP mechanics — auth token, timeouts, and the /identify protocol
+// handshake (see internal/client's doc comment for why that lives there
+// and not here: a later TUI phase is a client over the same wire).
 //
-// Every request to wmuxd goes through here so three things are guaranteed
-// by construction rather than by remembering to do them at ~18 call sites:
-//
-//   - the auth token is attached (wmuxd rejects unauthenticated requests;
-//     see internal/daemon/auth.go for why an executes-arbitrary-commands
-//     API on loopback needs one),
-//   - a timeout applies, so a wedged daemon fails a command instead of
-//     hanging it forever on http.DefaultClient's absent deadline, and
-//   - the daemon on the other end is actually wmuxd, speaking a protocol
-//     this wmux understands (see checkIdentify below) — checked once per
-//     process, before the first real request.
+// Kept as function wrappers rather than switching every one of the ~20
+// call sites across this package to method calls on a shared *client
+// value, so this refactor is a pure swap of what's underneath — no other
+// file changes.
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/peterkure3/wmux/internal/authtoken"
-	"github.com/peterkure3/wmux/internal/proto"
-	"github.com/peterkure3/wmux/internal/version"
+	"github.com/peterkure3/wmux/internal/client"
 )
 
 // daemonToken is read once at startup. A missing file yields "" — the
@@ -40,54 +34,52 @@ var daemonToken = func() string {
 	return tok
 }()
 
-// daemonClient covers ordinary request/response calls. The timeout spans
-// the whole exchange including the body read, which is correct here: every
-// such response is a small JSON document.
-var daemonClient = &http.Client{Timeout: 15 * time.Second}
+// dc is the shared client every daemon-talking command in this package
+// goes through.
+var dc = client.New(daemonAddr, daemonToken)
 
-// daemonStreamClient is for the long-lived streams — GET /events (SSE) and
-// GET /surfaces/attach (NDJSON). It has no Timeout, because
-// http.Client.Timeout bounds the body read too and would sever a live
-// stream mid-session. Callers bound these with a context instead.
-var daemonStreamClient = &http.Client{}
-
-func daemonRequest(client *http.Client, method, path string, contentType string, body io.Reader) (*http.Response, error) {
-	if path != "/identify" {
-		checkIdentify()
+// exitOnProtocolError turns a *client.ProtocolError into the CLI's own
+// policy for it — print the precise message and exit 3 — so callers of
+// daemonGet/daemonPost/daemonStream/daemonStreamRequest never see it as
+// just another "could not reach wmuxd" error. internal/client itself
+// only returns the typed error and never calls os.Exit: a future TUI
+// client needs to handle the same error by showing a banner, not dying.
+func exitOnProtocolError(err error) {
+	if pe, ok := err.(*client.ProtocolError); ok {
+		fmt.Fprintln(os.Stderr, "wmux: "+pe.Error())
+		os.Exit(3)
 	}
-	req, err := http.NewRequest(method, daemonAddr+path, body)
-	if err != nil {
-		return nil, err
-	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	req.Header.Set(authtoken.HeaderName, daemonToken)
-	return client.Do(req)
 }
 
 // daemonPost replaces http.Post for daemon endpoints. path is the leading
 // "/..." only; daemonAddr is prepended.
 func daemonPost(path, contentType string, body io.Reader) (*http.Response, error) {
-	return daemonRequest(daemonClient, http.MethodPost, path, contentType, body)
+	resp, err := dc.Post(path, contentType, body)
+	exitOnProtocolError(err)
+	return resp, err
 }
 
 // daemonGet replaces http.Get for daemon endpoints.
 func daemonGet(path string) (*http.Response, error) {
-	return daemonRequest(daemonClient, http.MethodGet, path, "", nil)
+	resp, err := dc.Get(path)
+	exitOnProtocolError(err)
+	return resp, err
 }
 
 // daemonStream is daemonGet for endpoints that stay open indefinitely.
 func daemonStream(path string) (*http.Response, error) {
-	return daemonRequest(daemonStreamClient, http.MethodGet, path, "", nil)
+	resp, err := dc.Stream(path)
+	exitOnProtocolError(err)
+	return resp, err
 }
 
 // daemonStreamRequest builds an authenticated streaming request the caller
 // drives itself — used where a cancellable context has to own the
 // connection's lifetime (wmux connect's detach path).
 func daemonStreamRequest(req *http.Request) (*http.Response, error) {
-	req.Header.Set(authtoken.HeaderName, daemonToken)
-	return daemonStreamClient.Do(req)
+	resp, err := dc.StreamRequest(req)
+	exitOnProtocolError(err)
+	return resp, err
 }
 
 // describeStatus turns a non-2xx daemon response into a message that names
@@ -108,53 +100,4 @@ func describeStatus(resp *http.Response) string {
 	default:
 		return fmt.Sprintf("daemon returned %s: %s", resp.Status, msg)
 	}
-}
-
-var identifyOnce sync.Once
-
-// checkIdentify calls GET /identify once per process, before this CLI's
-// first real request to wmuxd, and exits immediately with a precise
-// message if the two are protocol-incompatible or something other than
-// wmuxd answered — rather than let the real request fail with a bare 401
-// or an opaque decode error that gives no hint why.
-//
-// Any failure of the identify call itself — daemon unreachable, or an old
-// wmuxd predating this endpoint (404) — is not an error here: the actual
-// request this call is guarding will hit the same daemon right after and
-// report that failure on its own terms.
-func checkIdentify() {
-	identifyOnce.Do(func() {
-		resp, err := daemonRequest(daemonClient, http.MethodGet, "/identify", "", nil)
-		if err != nil {
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return
-		}
-		var id proto.IdentifyResponse
-		if err := json.NewDecoder(resp.Body).Decode(&id); err != nil {
-			return
-		}
-		if msg := identifyProblem(id); msg != "" {
-			fmt.Fprintln(os.Stderr, "wmux: "+msg)
-			os.Exit(3)
-		}
-	})
-}
-
-// identifyProblem compares a daemon's /identify response against this
-// process's own expectations, returning the message to print and exit on,
-// or "" if the pairing is fine. Split from checkIdentify so the decision
-// itself is unit-testable without a live daemon or an os.Exit in the way.
-func identifyProblem(id proto.IdentifyResponse) string {
-	if id.App != "wmuxd" {
-		return fmt.Sprintf("something other than wmuxd is answering on %s (got app=%q) — refusing to talk to it",
-			daemonAddr, id.App)
-	}
-	if id.Protocol != proto.ProtocolVersion {
-		return fmt.Sprintf("wmux %s cannot talk to wmuxd %s (protocol %d vs %d) — restart wmuxd",
-			version.String(), id.Version, proto.ProtocolVersion, id.Protocol)
-	}
-	return ""
 }
