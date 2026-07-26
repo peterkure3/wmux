@@ -18,16 +18,31 @@ import (
 
 // Session represents one running agent session (a shell running Claude
 // Code, Codex, etc.) that the daemon is watching.
+//
+// Field ownership is split deliberately, because this struct is read
+// concurrently by the HTTP handlers, the metadata poller, the output
+// watcher, and the reaper:
+//
+//   - The exported fields are set once at construction and never written
+//     again, so they are safe to read without holding mu.
+//   - Everything below mu is guarded by mu. That includes cmd and sfc,
+//     which are now assigned *after* the session is published into
+//     d.sessions (see reserveID) rather than before — so reading them
+//     unlocked is a real race, not merely an untidy one. Use proc() and
+//     surfaceRef() instead of touching them directly.
 type Session struct {
+	// Immutable after construction — safe to read without mu.
 	ID      string
 	Cwd     string
 	Distro  string
 	Command string
 
+	// Guarded by mu.
 	mu         sync.Mutex
 	cmd        *exec.Cmd
-	sfc        *Surface // non-nil for surface sessions (daemon-owned ConPTY; see surface.go)
-	wasSurface bool     // restored surface whose ConPTY died with the previous daemon run
+	sfc        *Surface  // non-nil for surface sessions (daemon-owned ConPTY; see surface.go)
+	job        jobHandle // process-tree kill handle; zero value off Windows (see jobobject_*.go)
+	wasSurface bool      // restored surface whose ConPTY died with the previous daemon run
 	pid        int
 	native     bool
 	branch     string
@@ -35,6 +50,21 @@ type Session struct {
 	lastNote   string
 	running    bool
 	deadStreak int // consecutive failed WSL liveness probes; see pollMetadata
+}
+
+// proc returns the exec.Cmd a Spawn-mode session owns, or nil for a
+// registered, restored, or surface session.
+func (s *Session) proc() *exec.Cmd {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cmd
+}
+
+// surfaceRef returns the session's Surface, or nil if it isn't one.
+func (s *Session) surfaceRef() *Surface {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sfc
 }
 
 func (s *Session) Info() proto.SessionInfo {
@@ -233,6 +263,54 @@ func buildCommand(cwd, distro, cmdline string) *exec.Cmd {
 	return cmd
 }
 
+// reserveID atomically claims a session ID and installs sess as its entry,
+// before the caller has started any process.
+//
+// Spawn and SpawnSurface used to check for a conflicting session, release
+// d.mu, start the process, and only then re-take the lock to install the
+// entry. Two concurrent requests for the same ID both passed the check and
+// both started a process; the second's map write then clobbered the first,
+// leaving a live process that nothing referenced — unreachable by `wmux
+// close` (which resolves the ID through this map) and, for a surface,
+// holding a leaked ConPTY and pty reader goroutine besides. Reserving the
+// ID up front makes the loser of that race fail at the check instead of
+// after it has already spawned. Register never had the bug: it has always
+// held d.mu across both the check and the insert.
+//
+// sess must already have running=true; the caller fills in cmd/sfc/pid
+// under sess.mu once its process is actually started, and must call
+// releaseID if starting fails.
+func (d *Daemon) reserveID(sess *Session) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if existing, exists := d.sessions[sess.ID]; exists {
+		existing.mu.Lock()
+		stillRunning := existing.running
+		existing.mu.Unlock()
+		if stillRunning {
+			return fmt.Errorf("session %q is already running", sess.ID)
+		}
+		// The existing entry has exited — fall through and replace it, so
+		// the same session ID can be reused across restarts of the agent.
+	}
+	d.sessions[sess.ID] = sess
+	return nil
+}
+
+// releaseID drops a reservation whose process failed to start.
+//
+// The pointer comparison is defensive: no other caller can currently
+// replace a reserved entry (reserveID rejects a running one, and a
+// reservation is running until released), but deleting by ID alone would
+// silently evict someone else's session the moment that stops being true.
+func (d *Daemon) releaseID(sess *Session) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if cur, ok := d.sessions[sess.ID]; ok && cur == sess {
+		delete(d.sessions, sess.ID)
+	}
+}
+
 // Register creates a session entry for "attach mode": the daemon doesn't
 // own or pipe the process (see Spawn for that) — the caller (wmux attach)
 // runs the real agent command with a full TTY passthrough itself, and just
@@ -317,6 +395,10 @@ func (d *Daemon) Close(id string) error {
 		return fmt.Errorf("session %q not found", id)
 	}
 
+	// Validate first, then take ownership. Taking the job handle out before
+	// the checks would strand it on every error return — including the
+	// common "already closed" case, where the handle still belongs to
+	// whoever is about to release it.
 	sess.mu.Lock()
 	pid := sess.pid
 	running := sess.running
@@ -330,6 +412,17 @@ func (d *Daemon) Close(id string) error {
 		return fmt.Errorf("session %q has no tracked process to close", id)
 	}
 
+	// Take the job handle *out* of the session rather than copying it: both
+	// terminate() and release() close the underlying kernel handle, so two
+	// concurrent Closes — or a Close racing waitExit's release — must not
+	// each end up holding it. Whoever removes it owns it; everyone else
+	// gets the zero value and falls through to the single-PID path below,
+	// which is harmless against an already-dead process.
+	sess.mu.Lock()
+	job := sess.job
+	sess.job = jobHandle{}
+	sess.mu.Unlock()
+
 	// A WSL-registered session's PID lives inside the distro's own PID
 	// namespace, where it means nothing to this side's process table.
 	// os.FindProcess always succeeds on Windows and Kill is a raw
@@ -338,15 +431,30 @@ func (d *Daemon) Close(id string) error {
 	// number. pollMetadata already respects this boundary via pidVisible;
 	// so must this. Kill it inside the distro instead.
 	if !pidVisible(native, sess.Command) {
-		args := append(wslArgs(sess.Distro), "--exec", "kill", "-TERM", strconv.Itoa(pid))
-		if out, err := hiddenCommand("wsl.exe", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("could not kill pid %d inside WSL distro %q: %w: %s",
-				pid, sess.Distro, err, strings.TrimSpace(string(out)))
+		// A WSL-registered session never has a job (we did not spawn it),
+		// but release defensively so a future code path that gives it one
+		// cannot leak the handle here.
+		job.release()
+		if err := killInWSL(sess.Distro, pid); err != nil {
+			return err
 		}
 		d.markExited(sess)
 		return nil
 	}
 
+	// Job object path: takes the agent AND every descendant down together.
+	// Without it, killing the root of `cmd.exe /c claude` leaves the agent
+	// itself running as an orphan — the launcher is what dies.
+	if job.valid() {
+		if err := job.terminate(); err != nil {
+			return fmt.Errorf("could not kill process tree for session %q: %w", id, err)
+		}
+		d.markExited(sess)
+		return nil
+	}
+
+	// No job (pre-existing session restored from state, or job creation
+	// failed at spawn): fall back to killing the root PID alone.
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("could not find process %d: %w", pid, err)
@@ -363,41 +471,101 @@ func (d *Daemon) Close(id string) error {
 	return nil
 }
 
+// wslTermGrace is how long a session inside a WSL distro gets to handle
+// SIGTERM before it is killed outright. Agents write conversation/session
+// state on shutdown, so the graceful attempt is worth the wait; the
+// escalation is what stops a wedged process from being reported closed
+// while it is still running.
+const wslTermGrace = 5 * time.Second
+
+// killInWSL ends a process inside a WSL distro with a real signal ladder:
+// SIGTERM, poll for it to actually go, then SIGKILL.
+//
+// The previous behavior sent SIGTERM once and immediately reported the
+// session closed, so an agent that ignored or was slow to handle the
+// signal stayed alive while `wmux list` said otherwise.
+//
+// The negative PID targets the process *group*, so a shell that spawned
+// children takes them with it; a session whose leader is not a group
+// leader falls back to signalling the PID alone.
+func killInWSL(distro string, pid int) error {
+	term := func(sig string, target string) error {
+		args := append(wslArgs(distro), "--exec", "kill", sig, target)
+		out, err := hiddenCommand("wsl.exe", args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("kill %s %s in distro %q: %w: %s",
+				sig, target, distro, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
+	group := "-" + strconv.Itoa(pid)
+	self := strconv.Itoa(pid)
+
+	// Group first; if this PID does not lead a group, fall back to it alone.
+	if err := term("-TERM", group); err != nil {
+		if err := term("-TERM", self); err != nil {
+			return err
+		}
+	}
+
+	deadline := time.Now().Add(wslTermGrace)
+	for time.Now().Before(deadline) {
+		if !processAliveWSL(distro, pid) {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Still there: stop asking.
+	if err := term("-KILL", group); err != nil {
+		return term("-KILL", self)
+	}
+	return nil
+}
+
 // Spawn starts a new agent session and begins watching its combined
 // stdout/stderr stream for notification escape sequences.
 func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
-	d.mu.Lock()
-	if existing, exists := d.sessions[req.ID]; exists {
-		existing.mu.Lock()
-		stillRunning := existing.running
-		existing.mu.Unlock()
-		if stillRunning {
-			d.mu.Unlock()
-			return nil, fmt.Errorf("session %q is already running", req.ID)
-		}
-		// existing entry has exited — fall through and replace it below.
+	sess := &Session{
+		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
+		running: true,
 	}
-	d.mu.Unlock()
+	if err := d.reserveID(sess); err != nil {
+		return nil, err
+	}
 
 	cmd := buildCommand(req.Cwd, req.Distro, req.Command)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		d.releaseID(sess)
 		return nil, err
 	}
 	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
+		d.releaseID(sess)
 		return nil, err
 	}
 
-	sess := &Session{
-		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
-		cmd: cmd, pid: cmd.Process.Pid, running: true,
+	// Confine the child's whole process tree so Close can take it down as
+	// a unit. killOnClose is deliberately false here: a Spawn-mode session
+	// is expected to outlive a daemon restart (load() re-checks its PID and
+	// resumes tracking), which JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE would
+	// break by killing it the moment wmuxd exits.
+	job, jerr := newJob(cmd.Process, false)
+	if jerr != nil {
+		// Not fatal — the session runs fine, Close just falls back to
+		// killing the root PID alone, which is the old behavior.
+		slog.Warn("could not confine session to a job object; close will not kill descendants",
+			"id", sess.ID, "err", jerr)
 	}
 
-	d.mu.Lock()
-	d.sessions[req.ID] = sess
-	d.mu.Unlock()
+	sess.mu.Lock()
+	sess.cmd = cmd
+	sess.pid = cmd.Process.Pid
+	sess.job = job
+	sess.mu.Unlock()
 
 	d.safeGo("watchOutput:"+sess.ID, func() { d.watchOutput(sess, stdout) })
 	d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
@@ -409,7 +577,20 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 }
 
 func (d *Daemon) waitExit(sess *Session) {
-	err := sess.cmd.Wait()
+	cmd := sess.proc()
+	if cmd == nil {
+		return // not a Spawn-mode session; nothing of ours to reap
+	}
+	err := cmd.Wait()
+
+	// Drop the job handle now the tree is gone, rather than holding a
+	// kernel handle per dead session for the life of the daemon.
+	sess.mu.Lock()
+	job := sess.job
+	sess.job = jobHandle{}
+	sess.mu.Unlock()
+	job.release()
+
 	d.markExited(sess)
 	if err != nil {
 		slog.Info("session exited", "id", sess.ID, "err", err)
@@ -452,7 +633,7 @@ func (d *Daemon) pollMetadata(sess *Session) {
 		native := sess.native
 		// Surface sessions are daemon-owned too: reapSurface's cmd.Wait()
 		// reaps them, so the WSL liveness probe below must not apply.
-		daemonOwned := sess.cmd != nil || sess.sfc != nil
+		daemonOwned := sess.cmd != nil || sess.sfc != nil // guarded: mu held
 		sess.mu.Unlock()
 		if !running {
 			return

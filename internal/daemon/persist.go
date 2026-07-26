@@ -71,14 +71,40 @@ func (d *Daemon) save() {
 
 	// Write to a temp file and rename over the real path so a crash
 	// mid-write never leaves a truncated/corrupt state file behind.
+	//
+	// The fsync is load-bearing, not belt-and-braces: rename() is atomic
+	// for the *directory entry*, but it says nothing about whether the
+	// temp file's contents ever reached the disk. Without the sync, a
+	// power loss between the write and the flush leaves a perfectly
+	// atomic rename of a zero-length file over the good state — the exact
+	// corruption the rename was supposed to prevent, just harder to spot.
 	tmp := d.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := writeFileSync(tmp, b, 0o644); err != nil {
 		slog.Error("could not write session state", "err", err)
 		return
 	}
 	if err := os.Rename(tmp, d.statePath); err != nil {
 		slog.Error("could not finalize session state", "err", err)
+		os.Remove(tmp) // don't leave the orphan behind for the next run to trip over
 	}
+}
+
+// writeFileSync is os.WriteFile plus an fsync before close, so the bytes
+// are durable by the time the caller renames the file into place.
+func writeFileSync(path string, b []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // load restores sessions from a previous run's snapshot, if one exists.

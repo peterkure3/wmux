@@ -46,18 +46,16 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 		return nil, fmt.Errorf("surface needs id and command")
 	}
 
-	d.mu.Lock()
-	if existing, exists := d.sessions[req.ID]; exists {
-		existing.mu.Lock()
-		stillRunning := existing.running
-		existing.mu.Unlock()
-		if stillRunning {
-			d.mu.Unlock()
-			return nil, fmt.Errorf("session %q is already running", req.ID)
-		}
-		// existing entry has exited — fall through and replace it below.
+	// Claim the ID before allocating anything, so a concurrent request for
+	// the same ID cannot end up with two live ConPTYs where only one is
+	// reachable — see reserveID.
+	sess := &Session{
+		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
+		native: req.Native || runtime.GOOS != "windows", running: true,
 	}
-	d.mu.Unlock()
+	if err := d.reserveID(sess); err != nil {
+		return nil, err
+	}
 
 	cols, rows := req.Cols, req.Rows
 	if cols < 2 || rows < 2 {
@@ -66,16 +64,19 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 
 	p, err := pty.New()
 	if err != nil {
+		d.releaseID(sess)
 		return nil, fmt.Errorf("could not allocate pty: %w", err)
 	}
 	if err := p.Resize(cols, rows); err != nil {
 		p.Close()
+		d.releaseID(sess)
 		return nil, fmt.Errorf("could not size pty: %w", err)
 	}
 
 	cmd := buildSurfaceCommand(p, req)
 	if err := cmd.Start(); err != nil {
 		p.Close()
+		d.releaseID(sess)
 		return nil, fmt.Errorf("could not start %q: %w", req.Command, err)
 	}
 
@@ -88,15 +89,22 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 		clients: make(map[chan proto.SurfaceFrame]struct{}),
 	}
 
-	sess := &Session{
-		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
-		pid: cmd.Process.Pid, native: req.Native || runtime.GOOS != "windows",
-		running: true, sfc: sfc,
+	// killOnClose is true for surfaces, unlike Spawn-mode sessions: a
+	// surface already cannot survive a daemon restart (its ConPTY dies with
+	// the daemon, which load() encodes by restoring it as exited), so tying
+	// the process tree's lifetime to the daemon's loses nothing and stops
+	// the agent and its children from leaking on every wmuxd exit.
+	job, jerr := newJob(cmd.Process, true)
+	if jerr != nil {
+		slog.Warn("could not confine surface to a job object; descendants may outlive it",
+			"id", sess.ID, "err", jerr)
 	}
 
-	d.mu.Lock()
-	d.sessions[req.ID] = sess
-	d.mu.Unlock()
+	sess.mu.Lock()
+	sess.pid = cmd.Process.Pid
+	sess.sfc = sfc
+	sess.job = job
+	sess.mu.Unlock()
 
 	d.safeGo("readSurface:"+sess.ID, func() { d.readSurface(sess) })
 	d.safeGo("reapSurface:"+sess.ID, func() { d.reapSurface(sess) })
@@ -149,7 +157,10 @@ func resolveExe(name string) string {
 // pty is closed — ConPTY reads do NOT return EOF when the child exits,
 // so reapSurface closing the pty is what actually unblocks this.
 func (d *Daemon) readSurface(sess *Session) {
-	sfc := sess.sfc
+	sfc := sess.surfaceRef()
+	if sfc == nil {
+		return
+	}
 	buf := make([]byte, 8192)
 	var pending []byte
 
@@ -185,7 +196,10 @@ func (d *Daemon) readSurface(sess *Session) {
 // (which unblocks readSurface — ConPTY never delivers EOF on its own),
 // marks the session exited, and tells attached clients.
 func (d *Daemon) reapSurface(sess *Session) {
-	sfc := sess.sfc
+	sfc := sess.surfaceRef()
+	if sfc == nil {
+		return
+	}
 	err := sfc.cmd.Wait()
 
 	sfc.mu.Lock()
@@ -199,6 +213,16 @@ func (d *Daemon) reapSurface(sess *Session) {
 	sfc.mu.Unlock()
 
 	sfc.pty.Close()
+
+	// The tree is gone; drop the job handle so it isn't held for the life
+	// of the daemon. On a killOnClose job this is also what reaps any
+	// descendant that outlived its parent.
+	sess.mu.Lock()
+	job := sess.job
+	sess.job = jobHandle{}
+	sess.mu.Unlock()
+	job.release()
+
 	d.markExited(sess)
 	if err != nil {
 		slog.Info("surface exited", "id", sess.ID, "err", err)
@@ -216,19 +240,23 @@ func (d *Daemon) surface(id string) (*Session, *Surface, error) {
 	if !ok {
 		return nil, nil, fmt.Errorf("session %q not found", id)
 	}
-	if sess.sfc == nil {
-		if sess.wasSurface {
+	sfc := sess.surfaceRef()
+	if sfc == nil {
+		sess.mu.Lock()
+		wasSurface := sess.wasSurface
+		sess.mu.Unlock()
+		if wasSurface {
 			return nil, nil, fmt.Errorf("surface %q did not survive a daemon restart (its ConPTY died with the old wmuxd process)", id)
 		}
 		return nil, nil, fmt.Errorf("session %q is not a surface (created by wmux new/attach, not wmux surface)", id)
 	}
-	sess.sfc.mu.Lock()
-	exited := sess.sfc.exited
-	sess.sfc.mu.Unlock()
+	sfc.mu.Lock()
+	exited := sfc.exited
+	sfc.mu.Unlock()
 	if exited {
 		return nil, nil, fmt.Errorf("surface %q has exited", id)
 	}
-	return sess, sess.sfc, nil
+	return sess, sfc, nil
 }
 
 // AttachSurface subscribes a client to a surface's output. The returned
@@ -267,12 +295,16 @@ func (d *Daemon) DetachSurface(id string, ch chan proto.SurfaceFrame) {
 	d.mu.RLock()
 	sess, ok := d.sessions[id]
 	d.mu.RUnlock()
-	if !ok || sess.sfc == nil {
+	if !ok {
 		return
 	}
-	sess.sfc.mu.Lock()
-	delete(sess.sfc.clients, ch)
-	sess.sfc.mu.Unlock()
+	sfc := sess.surfaceRef()
+	if sfc == nil {
+		return
+	}
+	sfc.mu.Lock()
+	delete(sfc.clients, ch)
+	sfc.mu.Unlock()
 }
 
 // InputSurface writes client keystrokes to the surface's pty.
