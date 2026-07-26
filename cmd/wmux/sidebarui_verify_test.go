@@ -104,6 +104,50 @@ func TestSidebarPromptEnterOpensPaneCmd(t *testing.T) {
 	}
 }
 
+// TestSidebarRepeatedEnterOnEmptyCommandStaysInPrompt is the regression
+// test for a real report: a keyboard with a repeat-key glitch fires
+// Enter several times for one physical press. The first Enter correctly
+// submits the cwd and moves to the (now empty) command prompt; every
+// ghost Enter after that used to see an empty command field and
+// silently cancel back to the list — no pane opened, no error shown,
+// indistinguishable from the whole flow just not working. It must
+// instead stay in the prompt untouched, so the user's actual keystrokes
+// (typing the real command) still land somewhere useful.
+func TestSidebarRepeatedEnterOnEmptyCommandStaysInPrompt(t *testing.T) {
+	m := newTestModel(30, 24)
+	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = mm.(sidebarModel)
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // submits cwd, enters modePromptCmd
+	m = mm.(sidebarModel)
+	if m.mode != modePromptCmd {
+		t.Fatalf("mode = %v, want modePromptCmd", m.mode)
+	}
+
+	// The keyboard glitch: several more Enters before any real typing.
+	for i := 0; i < 9; i++ {
+		mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = mm.(sidebarModel)
+		if m.mode != modePromptCmd {
+			t.Fatalf("ghost enter #%d: mode = %v, want to still be modePromptCmd", i+1, m.mode)
+		}
+		if cmd != nil {
+			t.Fatalf("ghost enter #%d: got a Cmd, want nil (nothing should fire on an empty command)", i+1)
+		}
+	}
+
+	// The user's real keystrokes should still work normally afterward.
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("claude")})
+	m = mm.(sidebarModel)
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(sidebarModel)
+	if m.mode != modeList {
+		t.Fatalf("after the real command + enter: mode = %v, want modeList", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected the open-pane Cmd once a real command was submitted")
+	}
+}
+
 func TestSidebarViewNoPanic(t *testing.T) {
 	m := newTestModel(30, 24)
 	m.sessions = []proto.SessionInfo{

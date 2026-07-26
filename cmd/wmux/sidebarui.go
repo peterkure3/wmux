@@ -274,15 +274,21 @@ func (m sidebarModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ti.SetValue("")
 				return m, nil
 			}
+			if val == "" {
+				// Stay in the prompt rather than silently cancelling — an
+				// Enter on an empty command field is far more likely a
+				// stray keystroke (e.g. a repeat-key hardware glitch
+				// firing twice) than someone deliberately abandoning a
+				// flow they just typed a cwd into. esc/ctrl+c above are
+				// the explicit way out.
+				return m, nil
+			}
 			m.mode = modeList
 			m.ti.Blur()
-			if val != "" {
-				if m.onOpen != nil {
-					return m, m.onOpen(m.newCwd, val)
-				}
-				return m, openPaneCmd(m.newCwd, val, m.sessions)
+			if m.onOpen != nil {
+				return m, m.onOpen(m.newCwd, val)
 			}
-			return m, nil
+			return m, openPaneCmd(m.newCwd, val, m.sessions)
 		}
 		var cmd tea.Cmd
 		m.ti, cmd = m.ti.Update(msg)
