@@ -6,13 +6,18 @@ OSC 9/99/777 notification escape sequences, tracks git branch and listening
 ports per session, and serves it all over a local HTTP API. `wmux` is the
 CLI you wire into agent hooks and use to inspect state.
 
-Status: daemon + CLI are working end-to-end, verified on a real Windows 11
-+ WSL2 machine (spawn → OSC-9 parse → live SSE push → `list`/`watch`
-output, `wmux pane`'s full `wt.exe`/`wsl.exe` quoting chain, both hook
-commands). `wmux sidebar` opens a live session sidebar as a Windows
-Terminal pane — see `docs/sidebar-design.md`.
+Running `wmux` with no arguments opens the multiplexer: a full-screen
+multi-pane TUI over daemon-owned sessions, with the live session sidebar
+as one of its panes. It draws the panes itself — no Windows Terminal
+splits involved — so the same binary behaves the same on Windows, in
+WSL, and on Linux.
 
-**Note:** `--distro` (for `wmux new`/`wmux pane`) is optional — if omitted,
+Status: daemon + CLI + TUI are working end-to-end, verified on a real
+Windows 11 + WSL2 machine (spawn → OSC-9 parse → live SSE push →
+`list`/`watch` output, both hook commands, and the TUI's attach/render/
+input path). See `docs/sidebar-design.md` for the sidebar's design.
+
+**Note:** `--distro` is optional everywhere it appears — if omitted,
 `wsl.exe` uses your system's actual default distro (`wsl.exe --status`),
 same as running `wsl.exe` with no `-d` yourself. Pass `--distro <name>`
 explicitly only if you want a *non-default* distro (check names with
@@ -21,14 +26,24 @@ explicitly only if you want a *non-default* distro (check names with
 ## Layout
 
 ```
-cmd/wmuxd/       daemon entrypoint
-cmd/wmux/        CLI entrypoint
-internal/daemon/ session management, OSC watcher, git/port polling, HTTP+SSE server, panic recovery
+cmd/wmuxd/        daemon entrypoint
+cmd/wmux/         CLI entrypoint (a three-line shim over internal/cli)
+internal/cli/     every wmux subcommand, and the kong command tree
+internal/tui/     the multiplexer: model, key routing, mouse, panes, sidebar, themes
+internal/layout/  the split/grid tree — pure geometry, no I/O
+internal/client/  daemon HTTP client shared by the CLI and the TUI
+internal/daemon/  session management, OSC watcher, git/port polling, HTTP+SSE server, panic recovery
+internal/agentprofile/ per-agent hook profiles (TOML) + launch commands
 internal/wmuxlog/ structured logger (log/slog, JSON + rotation) — see docs/logger-design.md
-internal/proto/  shared wire types
-bin/             prebuilt binaries (windows-amd64, linux-amd64)
-install/         Windows installer script (install.ps1/uninstall.ps1)
+internal/proto/   shared wire types
+bin/              prebuilt binaries (windows-amd64, linux-amd64)
+install/          Windows installer script (install.ps1/uninstall.ps1)
 ```
+
+The dependency direction is one-way: `cli` → `tui` → `layout`, and both
+`cli` and `tui` talk to the daemon only through `client`. Nothing imports
+`cli`, so the TUI and the layout engine are testable without a terminal
+or a process.
 
 ## Authentication
 
@@ -87,6 +102,53 @@ distro — the common case — run the Linux build of `wmuxd`/`wmux` (in
 `bin/linux-amd64/`) *inside that distro* instead of the Windows build on
 the host. See "Wiring real agent hooks" below for why.
 
+### The multiplexer (`wmux`, `wmux grid`)
+
+Plain `wmux` opens it. Panes are daemon-owned sessions; the sidebar is
+one of the panes:
+
+```
+wmux                      # session list, open panes from there with n
+wmux claude               # open it with one pane already running claude
+wmux grid 4               # four panes in a 2x2 grid
+wmux grid 4 --claude      # the same grid, every pane running claude
+wmux grid 3 --codex       # 3 panes: two over one, all running codex
+```
+
+`wmux grid N` accepts any N from 1 to 16 and arranges them in a balanced
+grid (2 side by side, 3 as two-over-one, 4 as a 2x2, 6 as 3x2...). The
+agent flags come from the same profiles `wmux hook run` uses —
+`--claude`, `--codex`, `--kimi`, `--kiro`, `--mimo`, `--agy` — or use
+`--agent NAME`, or `--cmd` for an arbitrary command. With none of them,
+the panes are shells.
+
+Inside the multiplexer:
+
+| key | does |
+| --- | --- |
+| `ctrl+o` | cycle panes |
+| click | focus the pane (or sidebar) under the cursor |
+| `ctrl+b` | switch to COMMAND mode |
+
+COMMAND mode is **sticky** — unlike tmux's one-shot prefix, one `ctrl+b`
+buys a run of commands, and `esc` (or `i`) goes back to typing at the
+pane. The mode is shown in the footer.
+
+| COMMAND key | does |
+| --- | --- |
+| `\|` / `v` | split the focused pane side by side |
+| `-` / `s` | split the focused pane stacked |
+| `n` | new pane, same axis as last time |
+| `x` | close the focused pane |
+| `tab`, arrows / `hjkl` | cycle / move focus |
+| `b` | show or hide the sidebar |
+| `g` | snap every pane into a balanced grid |
+| `esc` / `i` | back to INSERT (typing at the pane) |
+| `q` | quit |
+
+Splitting hands off to the sidebar's own cwd/command prompt, so `ctrl+b`
+`-` then a directory and a command is the whole flow.
+
 ### Headless sessions (`wmux new`)
 
 Good for background/batch runs where you don't need to type into the
@@ -94,59 +156,34 @@ agent — spawns the process with no TTY, piping its output through the
 daemon's OSC watcher:
 
 ```
+wmux new codex exec ...            # ID defaults to this directory's name
 wmux new --id my-project --cwd /home/you/my-project --cmd "codex exec ..."
 wmux list
 wmux watch
 ```
 
-### Interactive sessions (`wmux attach` + `wmux pane`)
+Every session-creating command takes the same optional flags, and none of
+them are required: `--id` defaults to the working directory's base name
+(uniquified against running sessions), `--cwd` defaults to the current
+directory, and the command can be given as trailing arguments instead of
+`--cmd`. Use the flags when a default is wrong, not routinely.
+
+### Interactive sessions (`wmux attach`)
 
 For anything you actually want to type into — `claude`, `codex`, a normal
 interactive session — `wmux new` won't work: it has no TTY, so readline,
 colors, and prompts all break, and there's no way to send it input at all.
 
 `wmux attach` runs a command with full TTY passthrough (real
-stdin/stdout/stderr) while still registering with the daemon for tracking:
+stdin/stdout/stderr) in *this* terminal, while still registering with the
+daemon for tracking:
 
 ```
-wmux attach --id my-project --cwd /home/you/my-project -- claude
+wmux attach claude
 ```
 
-`wmux pane` (run from PowerShell, not from inside WSL) opens a new
-Windows Terminal tab or split pane that runs `wmux attach` for you. By
-default it runs the command inside a WSL distro:
-
-```powershell
-wmux.exe pane --id my-project --cwd /home/you/my-project --cmd claude --split right
-```
-
-Pass `--native` to run the command directly on Windows instead — no WSL,
-no `wsl.exe` involved — for agents that are native Windows installs
-(check with `where claude`/`where codex` first; having a WSL distro on
-the machine doesn't mean the agent runs inside it):
-
-```powershell
-wmux.exe pane --native --id my-project --cwd D:\path\to\project --cmd claude.exe --split right
-```
-
-`--split` accepts `tab` (default, new tab), `right` (side-by-side split),
-or `down` (stacked split).
-
-### Whole workspaces at once (`wmux grid`)
-
-`wmux grid` opens 2-4 panes in a single new tab with one command — each
-pane its own session, all running the same command in the same cwd (N
-shells or N agents on one repo):
-
-```powershell
-wmux.exe grid --native --ids api,web,worker,scratch --cwd D:\dev\proj --cmd cmd.exe
-```
-
-Layouts are equal splits: 2 ids side-by-side, 3 ids one full-height left
-plus two stacked right, 4 ids a 2x2 grid (order: top-left, top-right,
-bottom-right, bottom-left). Under the hood it is `wmux pane` N times in
-one chained `wt.exe` invocation, so the tab appears fully laid out at
-once and every pane self-closes when its session ends.
+For a pane inside the multiplexer, or a session that outlives its
+terminal, use `wmux grid`/`wmux` or `wmux surface` below instead.
 
 ### Detachable sessions (`wmux surface` + `wmux connect`)
 
@@ -157,16 +194,18 @@ Windows Terminal entirely — the agent keeps running; reconnect later and
 the current screen repaints exactly (a VT replay, not scrollback).
 
 ```
-wmux surface --id my-project --cwd /home/you/my-project --cmd claude   # spawn, headless
-wmux connect --id my-project                                           # view/control it here
+wmux surface claude       # spawn it headless, ID named after this directory
+wmux connect              # view/control it here (the only running surface)
+wmux connect my-project   # ...or name one
 ```
 
 `Ctrl-]` detaches (the session keeps running); reconnect any time, from
 any terminal, with the same `wmux connect`. Several clients can attach at
-once. Pass `--native` to `wmux surface` to run the command directly on
-Windows, same rule as `wmux pane --native`. Surfaces show up in
-`wmux list`/the sidebar like any session, and their output is watched for
-OSC notify sequences like `wmux new` sessions.
+once. `wmux surface` with no command opens a shell. Pass `--native` to
+run the command directly on Windows instead of inside WSL. Surfaces show
+up in `wmux list`/the sidebar like any session, their output is watched
+for OSC notify sequences like `wmux new` sessions, and they are exactly
+what the multiplexer's panes are.
 
 Caveats: a surface dies with the daemon (the ConPTY can't survive a wmuxd
 restart — it comes back as `exited`), and `wmux update` restarts wmuxd,
@@ -197,76 +236,22 @@ a log tail into one file — the one to attach to a bug report), and
 `wmux debug pprof cpu|heap|goroutine` (stdlib profiling). See
 `docs/debugger-design.md`.
 
-Under the hood, `wmux pane` files a "pane spec" with the daemon and opens
-the pane on a dedicated `wmux` Windows Terminal profile (installed
-automatically as a [settings fragment](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions),
-never touching your own `settings.json` content). The profile's fixed
-commandline, `wmux pane-exec`, claims the spec back by session ID (carried
-via the pane title) and runs `wmux attach` for you. This indirection is
-what makes panes **close themselves**: a `wt.exe` pane only honors its
-profile's `closeOnExit` setting when it runs the profile's own
-commandline, so the profile can use `closeOnExit: "always"` — the pane
-disappears from the layout the moment its process exits or `wmux close`
-kills it, instead of lingering as an inert dead pane (which is what
-happens with a commandline passed straight through `wt.exe`, and there's
-no API to remove such a pane afterwards).
-
-The pane keeps the session ID as its fixed title
-(`--suppressApplicationTitle`), which is also what `wmux focus --id`
-uses to find it.
-
-(Note: `wt.exe`'s own `-V`/`-H` flags name the split after the
-orientation of the *dividing line*, which is the opposite of what most
-people mean by "vertical"/"horizontal" split — verified by screenshot
-that `-V` actually produces a left/right layout. `wmux pane` uses
-`right`/`down` instead specifically to avoid that confusion.)
-
-**PowerShell 5.1 quoting note for `--native --cmd`:** if the agent's path
-contains a space (e.g. a username like `C:\Users\Jane Doe\...`), avoid
-wrapping it in embedded double quotes inside `--cmd` — PowerShell 5.1's
-native-argv passing mangles arguments with literal embedded `"`
-characters and can silently drop trailing flags like `--split`. Use the
-8.3 short path instead (no spaces, no quoting needed):
-`(New-Object -ComObject Scripting.FileSystemObject).GetFile("C:\Users\Jane Doe\...\claude.exe").ShortPath`.
-
-### Switching focus (`wmux focus`)
-
-Two addressing modes, both runnable by an agent (e.g. from a hook or a
-tool call) as well as by hand — run from the Windows side, like
-`wmux pane`:
-
-```powershell
-wmux focus --id my-project      # focus that session's pane/tab, wherever it is
-wmux focus --dir right          # move focus one pane right in the current window
-```
-
-`--id` finds the pane by its title (every `wmux pane` keeps the session
-ID as its fixed title) via UI Automation: it brings the right Windows
-Terminal window to the foreground, selects the tab, and puts keyboard
-focus on the exact pane — including one half of a split. `--dir`
-(`left`/`right`/`up`/`down`) is relative movement within the most
-recently used WT window (plain `wt move-focus`), useful for "jump to the
-pane I just opened next to myself".
-
 ### Closing a session (`wmux close`)
 
 ```
-wmux close --id my-project
+wmux close                # the only running session
+wmux close my-project     # ...or name one
 ```
 
 Kills the session's tracked process — the daemon-owned process for
-`wmux new`, or the registered PID for `wmux attach`/`wmux pane` (the
+`wmux new`/`wmux surface`, or the registered PID for `wmux attach` (the
 daemon learns the real PID at register time). This ends the agent and
 deregisters the session (`wmux list` shows `running: false`
-immediately).
+immediately). With no ID and several sessions running, it lists them
+rather than guessing which one you meant.
 
-For a session opened via `wmux pane`, killing the agent unwinds the
-pane's whole process chain, and the `wmux` profile's
-`closeOnExit: "always"` then removes the pane from the Windows Terminal
-layout entirely — nothing left to close by hand. (Panes opened by older
-wmux versions, which passed the commandline straight through `wt.exe`,
-still linger as inert panes — that's unfixable from outside and exactly
-why the profile flow exists.)
+Inside the multiplexer, `ctrl+b` `x` does the same thing to the focused
+pane and removes it from the layout.
 
 ## Building from source
 
