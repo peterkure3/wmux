@@ -38,6 +38,7 @@ internal/wmuxlog/ structured logger (log/slog, JSON + rotation) — see docs/log
 internal/proto/   shared wire types
 bin/              prebuilt binaries (windows-amd64, linux-amd64)
 install/          Windows installer script (install.ps1/uninstall.ps1)
+gui/              Kotlin/Compose Desktop native GUI client (wmuxd HTTP API), separate Gradle build — see gui/README.md
 ```
 
 The dependency direction is one-way: `cli` → `tui` → `layout`, and both

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle build + test
+        run: ./gradlew build test --stacktrace
+
+      - name: Package MSI/EXE
+        run: ./gradlew :app:packageDistributionForCurrentOS
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmux-windows-installer
+          path: app/build/compose/binaries/main/**/*.{msi,exe}
