@@ -7,7 +7,9 @@
 package cli
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,7 +43,7 @@ func fetchFromRelease(tag string) (stagingDir, ver string, err error) {
 			return "", "", err
 		}
 	}
-	asset := fmt.Sprintf("wmux_%s_%s.zip", tag, releaseAssetPlatform())
+	asset := fmt.Sprintf("wmux_%s_%s.%s", tag, releaseAssetPlatform(), releaseAssetExt())
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", releaseRepo, tag)
 
 	stagingDir, err = os.MkdirTemp("", "wmux-update-")
@@ -50,8 +52,8 @@ func fetchFromRelease(tag string) (stagingDir, ver string, err error) {
 	}
 
 	up.step("downloading " + asset)
-	zipPath := filepath.Join(stagingDir, asset)
-	if err := downloadFile(base+asset, zipPath); err != nil {
+	archivePath := filepath.Join(stagingDir, asset)
+	if err := downloadFile(base+asset, archivePath); err != nil {
 		return stagingDir, "", fmt.Errorf("download %s: %w", asset, err)
 	}
 
@@ -60,10 +62,10 @@ func fetchFromRelease(tag string) (stagingDir, ver string, err error) {
 	if err != nil {
 		return stagingDir, "", fmt.Errorf("download SHA256SUMS: %w", err)
 	}
-	if err := verifySHA256(zipPath, asset, string(sums)); err != nil {
+	if err := verifySHA256(archivePath, asset, string(sums)); err != nil {
 		return stagingDir, "", err
 	}
-	if err := extractBinaries(zipPath, stagingDir); err != nil {
+	if err := extractBinaries(archivePath, stagingDir); err != nil {
 		return stagingDir, "", err
 	}
 	return stagingDir, tag, nil
@@ -176,45 +178,117 @@ func verifySHA256(path, name, sums string) error {
 }
 
 // extractBinaries pulls exactly wmux + wmuxd (platform-appropriate names)
-// out of the release zip into outDir. Only those two known names are
-// extracted — the archive content is still remote input even after the
-// checksum passed, so no path from inside it is ever used to build a
-// destination.
-func extractBinaries(zipPath, outDir string) error {
+// out of the downloaded release archive into outDir. Dispatches on the
+// archive's own extension rather than runtime.GOOS: the two always match
+// in practice (releaseAssetExt picked the extension that matches this
+// platform's asset), but keying off the file itself is one less thing to
+// keep in sync if that ever changes.
+func extractBinaries(archivePath, outDir string) error {
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractFromZip(archivePath, outDir)
+	}
+	if strings.HasSuffix(archivePath, ".tar.gz") {
+		return extractFromTarGz(archivePath, outDir)
+	}
+	return fmt.Errorf("unrecognized release archive format: %s", archivePath)
+}
+
+// wantedBinaries returns the platform-appropriate wmux/wmuxd names as a
+// lookup set, shared by both extractors.
+func wantedBinaries() map[string]bool {
+	return map[string]bool{
+		wmuxBinaryName():  true,
+		wmuxdBinaryName(): true,
+	}
+}
+
+func extractFromZip(zipPath, outDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("open release archive: %w", err)
 	}
 	defer r.Close()
 
-	wmuxName := wmuxBinaryName()
-	wmuxdName := wmuxdBinaryName()
-
+	wanted := wantedBinaries()
 	found := map[string]bool{}
 	for _, f := range r.File {
 		name := filepath.Base(f.Name)
-		if name != wmuxName && name != wmuxdName {
+		if !wanted[name] {
 			continue
 		}
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(filepath.Join(outDir, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		if err != nil {
+		if err := writeExtracted(rc, filepath.Join(outDir, name)); err != nil {
 			rc.Close()
 			return err
 		}
-		_, cerr := io.Copy(dst, rc)
 		rc.Close()
-		if err := dst.Close(); cerr == nil {
-			cerr = err
+		found[name] = true
+	}
+	return requireFound(found)
+}
+
+// extractFromTarGz handles the Linux release archive (tar.gz — see
+// .github/workflows/release.yml). archive/tar's header Typeflag is
+// checked so a directory entry or anything but a regular file is
+// skipped; the archive is remote input even post-checksum, so nothing
+// about its internal structure is trusted beyond "does this entry's
+// base name match one of the two we want."
+func extractFromTarGz(archivePath, outDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open release archive: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("open release archive: %w", err)
+	}
+	defer gz.Close()
+
+	wanted := wantedBinaries()
+	found := map[string]bool{}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
 		}
-		if cerr != nil {
-			return cerr
+		if err != nil {
+			return fmt.Errorf("read release archive: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := filepath.Base(hdr.Name)
+		if !wanted[name] {
+			continue
+		}
+		if err := writeExtracted(tr, filepath.Join(outDir, name)); err != nil {
+			return err
 		}
 		found[name] = true
 	}
+	return requireFound(found)
+}
+
+func writeExtracted(src io.Reader, dest string) error {
+	dst, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	_, cerr := io.Copy(dst, src)
+	if err := dst.Close(); cerr == nil {
+		cerr = err
+	}
+	return cerr
+}
+
+func requireFound(found map[string]bool) error {
+	wmuxName, wmuxdName := wmuxBinaryName(), wmuxdBinaryName()
 	if !found[wmuxName] || !found[wmuxdName] {
 		return fmt.Errorf("release archive is missing %s/%s", wmuxName, wmuxdName)
 	}

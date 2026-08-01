@@ -32,6 +32,19 @@ func releaseAssetPlatform() string {
 	return "linux-amd64"
 }
 
+// releaseAssetExt is the archive format the release workflow actually
+// packages each platform in (see .github/workflows/release.yml) —
+// zip for Windows, tar.gz for Linux (tar preserves the executable bit,
+// which a zip on a non-Windows build system would need extra tooling to
+// set; gzip+tar is the path of least resistance there and is what's
+// actually published).
+func releaseAssetExt() string {
+	if runtime.GOOS == "windows" {
+		return "zip"
+	}
+	return "tar.gz"
+}
+
 // killCommandName/killCommandArgs/killCommandLabel abstract the one-shot
 // force-kill used by stopDaemon's bootstrap fallback (a running wmuxd
 // that predates the /shutdown endpoint) across platforms.
