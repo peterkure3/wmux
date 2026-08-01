@@ -41,7 +41,7 @@ func fetchFromRelease(tag string) (stagingDir, ver string, err error) {
 			return "", "", err
 		}
 	}
-	asset := fmt.Sprintf("wmux_%s_windows-amd64.zip", tag)
+	asset := fmt.Sprintf("wmux_%s_%s.zip", tag, releaseAssetPlatform())
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", releaseRepo, tag)
 
 	stagingDir, err = os.MkdirTemp("", "wmux-update-")
@@ -175,10 +175,11 @@ func verifySHA256(path, name, sums string) error {
 	return nil
 }
 
-// extractBinaries pulls exactly wmux.exe and wmuxd.exe out of the release
-// zip into outDir. Only the two known names are extracted — the archive
-// content is still remote input even after the checksum passed, so no
-// path from inside it is ever used to build a destination.
+// extractBinaries pulls exactly wmux + wmuxd (platform-appropriate names)
+// out of the release zip into outDir. Only those two known names are
+// extracted — the archive content is still remote input even after the
+// checksum passed, so no path from inside it is ever used to build a
+// destination.
 func extractBinaries(zipPath, outDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -186,10 +187,13 @@ func extractBinaries(zipPath, outDir string) error {
 	}
 	defer r.Close()
 
+	wmuxName := wmuxBinaryName()
+	wmuxdName := wmuxdBinaryName()
+
 	found := map[string]bool{}
 	for _, f := range r.File {
 		name := filepath.Base(f.Name)
-		if name != "wmux.exe" && name != "wmuxd.exe" {
+		if name != wmuxName && name != wmuxdName {
 			continue
 		}
 		rc, err := f.Open()
@@ -211,8 +215,8 @@ func extractBinaries(zipPath, outDir string) error {
 		}
 		found[name] = true
 	}
-	if !found["wmux.exe"] || !found["wmuxd.exe"] {
-		return fmt.Errorf("release archive is missing wmux.exe/wmuxd.exe")
+	if !found[wmuxName] || !found[wmuxdName] {
+		return fmt.Errorf("release archive is missing %s/%s", wmuxName, wmuxdName)
 	}
 	return nil
 }
