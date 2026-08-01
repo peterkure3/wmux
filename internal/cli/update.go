@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -52,13 +51,9 @@ func cmdUpdate(args []string) {
 	killSurfaces := fs.Bool("kill-surfaces", false, "proceed even if live surfaces exist — the wmuxd restart kills them")
 	fs.Parse(args)
 
-	if runtime.GOOS != "windows" {
-		fatalUpdate("wmux update is Windows-only for now — inside WSL, update the linux binary manually (see MANUAL.md)")
-	}
-
 	exe, err := os.Executable()
 	if err != nil {
-		fatalUpdate("could not resolve wmux.exe's own path: %v", err)
+		fatalUpdate("could not resolve wmux's own path: %v", err)
 	}
 	deployDir := filepath.Dir(exe)
 
@@ -160,23 +155,25 @@ func cmdUpdate(args []string) {
 		}
 	}
 
-	wmuxDest := filepath.Join(deployDir, "wmux.exe")
-	wmuxdDest := filepath.Join(deployDir, "wmuxd.exe")
+	wmuxName := wmuxBinaryName()
+	wmuxdName := wmuxdBinaryName()
+	wmuxDest := filepath.Join(deployDir, wmuxName)
+	wmuxdDest := filepath.Join(deployDir, wmuxdName)
 
 	up.step("installing binaries")
-	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, "wmuxd.exe"), wmuxdDest)
+	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, wmuxdName), wmuxdDest)
 	if err != nil {
 		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
-		fatalUpdate("could not install wmuxd.exe: %v", err)
+		fatalUpdate("could not install %s: %v", wmuxdName, err)
 	}
-	wmuxAside, err := swapBinary(filepath.Join(stagingDir, "wmux.exe"), wmuxDest)
+	wmuxAside, err := swapBinary(filepath.Join(stagingDir, wmuxName), wmuxDest)
 	if err != nil {
 		// Roll BOTH back — never leave a version-skewed wmux/wmuxd pair.
 		restoreBinary(wmuxDest, wmuxAside)
 		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
-		fatalUpdate("could not install wmux.exe: %v", err)
+		fatalUpdate("could not install %s: %v", wmuxName, err)
 	}
 
 	// The old daemon has exited, so its aside copy usually deletes fine
@@ -223,7 +220,7 @@ func resolveRepo(flagVal string) (string, error) {
 		repo = defaultRepo
 	}
 	if repo == "" {
-		return "", fmt.Errorf("no source repo configured — pass --repo D:\\path\\to\\wmux or set WMUX_REPO")
+		return "", fmt.Errorf("no source repo configured — pass --repo /path/to/wmux or set WMUX_REPO")
 	}
 	// Sanity check: this must actually be the wmux repo before we build
 	// and install whatever it contains.
@@ -279,9 +276,9 @@ func gitDescribe(repo string) (string, error) {
 // linker splits the flag string on spaces and repo paths may contain them.
 func buildBinaries(repo, outDir, ver string) error {
 	builds := []struct{ out, pkg, ldflags string }{
-		{"wmux.exe", "./cmd/wmux", fmt.Sprintf(
+		{wmuxBinaryName(), "./cmd/wmux", fmt.Sprintf(
 			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s' -X 'main.defaultRepo=%s'", ver, repo)},
-		{"wmuxd.exe", "./cmd/wmuxd", fmt.Sprintf(
+		{wmuxdBinaryName(), "./cmd/wmuxd", fmt.Sprintf(
 			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s'", ver)},
 	}
 	for _, b := range builds {
@@ -346,9 +343,10 @@ func stopDaemon() error {
 		// endpoint. Kill it hard — state.json is persisted after every
 		// mutation, so nothing is lost.
 		up.clear()
-		fmt.Fprintln(os.Stderr, "note: running wmuxd predates /shutdown; stopping it via taskkill")
-		if out, err := exec.Command("taskkill", "/F", "/IM", "wmuxd.exe").CombinedOutput(); err != nil {
-			return fmt.Errorf("taskkill wmuxd.exe failed: %v\n%s", err, strings.TrimSpace(string(out)))
+		name := wmuxdBinaryName()
+		fmt.Fprintf(os.Stderr, "note: running wmuxd predates /shutdown; stopping it via %s\n", killCommandLabel())
+		if out, err := exec.Command(killCommandName(), killCommandArgs(name)...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s failed: %v\n%s", killCommandLabel(), err, strings.TrimSpace(string(out)))
 		}
 	}
 	if !pollHealthz(5*time.Second, false) {
@@ -430,7 +428,7 @@ func restartOldDaemonAfterFailure(wasRunning bool, wmuxdPath string) {
 // session) may still hold one locked; it stays until a later update runs
 // after that process is gone.
 func cleanupOld(dir string) {
-	for _, pattern := range []string{"wmux.exe.old*", "wmuxd.exe.old*"} {
+	for _, pattern := range []string{wmuxBinaryName() + ".old*", wmuxdBinaryName() + ".old*"} {
 		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 		for _, m := range matches {
 			os.Remove(m)

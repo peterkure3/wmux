@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -56,7 +55,11 @@ func cmdAttach(args []string) {
 	// what `wmux close` later uses to kill this exact process.
 	regReq := proto.RegisterSessionRequest{
 		ID: id, Cwd: dir, Distro: *distro, PID: cmd.Process.Pid,
-		Native: runtime.GOOS == "windows",
+		// This function always execs cmdArgs directly (no wsl.exe wrapping
+		// happens here, unlike buildCommand's Spawn-mode path) — so the
+		// spawned process is always native to whatever OS this wmux binary
+		// itself is running on. --distro above is metadata only.
+		Native: true,
 	}
 	b, _ := json.Marshal(regReq)
 	resp, err := daemonPost("/sessions/register", "application/json", bytes.NewReader(b))

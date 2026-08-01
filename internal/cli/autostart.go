@@ -56,16 +56,17 @@ func fatalAutostart(format string, a ...any) {
 	os.Exit(1)
 }
 
-// siblingWmuxd resolves wmuxd.exe next to this wmux.exe — the same
-// deployDir convention `wmux update` uses (see update.go).
+// siblingWmuxd resolves the wmuxd binary next to this wmux binary — the
+// same deployDir convention `wmux update` uses (see update.go).
 func siblingWmuxd() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("could not resolve wmux's own path: %w", err)
 	}
-	wmuxd := filepath.Join(filepath.Dir(exe), "wmuxd.exe")
+	name := wmuxdBinaryName()
+	wmuxd := filepath.Join(filepath.Dir(exe), name)
 	if _, err := os.Stat(wmuxd); err != nil {
-		return "", fmt.Errorf("wmuxd.exe not found at %s: %w", wmuxd, err)
+		return "", fmt.Errorf("%s not found at %s: %w", name, wmuxd, err)
 	}
 	return wmuxd, nil
 }
