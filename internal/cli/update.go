@@ -113,12 +113,14 @@ func cmdUpdate(args []string) {
 	// to --release latest (e.g. because no --repo/WMUX_REPO is
 	// configured yet) and would otherwise downgrade to whatever the most
 	// recent published tag happens to be, with nothing printed to say
-	// so. Only fires when both versions parse as "vX.Y.Z" — an
-	// unstamped build (version.String() falling back to a plain VCS
-	// hash) can't be ordered against a tag at all, so that case is left
-	// as a note rather than a block; refusing outright there would also
-	// wrongly block every fresh/never-updated install.
-	if cmp, comparable := compareVersions(oldVer, newVer); comparable && cmp < 0 {
+	// so. resolveComparableVersion first tries to turn an unstamped
+	// build's raw VCS hash into a real git-describe string (via --repo,
+	// WMUX_REPO, or the cwd, in that order) so this isn't limited to
+	// only catching downgrades of already-stamped installs. If nothing
+	// resolves it, comparison is skipped rather than blocking — that
+	// case can't be told apart from a fresh/never-updated install.
+	comparableOld := resolveComparableVersion(oldVer, *repoFlag)
+	if cmp, comparable := compareVersions(comparableOld, newVer); comparable && cmp < 0 {
 		if !*force {
 			up.clear()
 			fatalUpdate("%s looks older than the currently running %s — refusing to downgrade (pass --force to override) — nothing was changed", newVer, oldVer)
