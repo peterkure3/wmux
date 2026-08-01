@@ -525,7 +525,7 @@ func killInWSL(distro string, pid int) error {
 func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	sess := &Session{
 		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
-		running: true,
+		native: runtime.GOOS != "windows", running: true,
 	}
 	if err := d.reserveID(sess); err != nil {
 		return nil, err
