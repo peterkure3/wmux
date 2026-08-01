@@ -49,6 +49,7 @@ func cmdUpdate(args []string) {
 	noPull := fs.Bool("no-pull", false, "build the repo as-is without git pull")
 	release := fs.String("release", "", `install a published GitHub release instead of building from source: "latest" or a tag like v0.2.0`)
 	killSurfaces := fs.Bool("kill-surfaces", false, "proceed even if live surfaces exist — the wmuxd restart kills them")
+	force := fs.Bool("force", false, "install even if the target version looks older than what's currently running")
 	fs.Parse(args)
 
 	exe, err := os.Executable()
@@ -104,6 +105,28 @@ func cmdUpdate(args []string) {
 		up.clear()
 		fmt.Printf("already up to date (%s)\n", oldVer)
 		return
+	}
+
+	// Guard against silently installing something older than what's
+	// currently running — the real failure mode this closes: a machine
+	// with unreleased local commits (oldVer ahead of any tag) falls back
+	// to --release latest (e.g. because no --repo/WMUX_REPO is
+	// configured yet) and would otherwise downgrade to whatever the most
+	// recent published tag happens to be, with nothing printed to say
+	// so. Only fires when both versions parse as "vX.Y.Z" — an
+	// unstamped build (version.String() falling back to a plain VCS
+	// hash) can't be ordered against a tag at all, so that case is left
+	// as a note rather than a block; refusing outright there would also
+	// wrongly block every fresh/never-updated install.
+	if cmp, comparable := compareVersions(oldVer, newVer); comparable && cmp < 0 {
+		if !*force {
+			up.clear()
+			fatalUpdate("%s looks older than the currently running %s — refusing to downgrade (pass --force to override) — nothing was changed", newVer, oldVer)
+		}
+		up.clear()
+		fmt.Fprintf(os.Stderr, "wmux update: warning: installing %s over the newer-looking %s anyway (--force)\n", newVer, oldVer)
+	} else if !comparable {
+		fmt.Fprintf(os.Stderr, "wmux update: note: %q and/or %q isn't a parseable vX.Y.Z version, so freshness could not be verified\n", oldVer, newVer)
 	}
 
 	wasRunning := daemonRunning()
