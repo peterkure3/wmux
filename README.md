@@ -1,6 +1,6 @@
 # wmux
 
-A cmux-equivalent notification/session daemon for Windows agent workflows.
+A cmux-equivalent notification/session daemon for AI agent workflows.
 `wmuxd` spawns and watches agent sessions (Claude Code, Codex, etc.) for
 OSC 9/99/777 notification escape sequences, tracks git branch and listening
 ports per session, and serves it all over a local HTTP API. `wmux` is the
@@ -15,13 +15,17 @@ WSL, and on Linux.
 Status: daemon + CLI + TUI are working end-to-end, verified on a real
 Windows 11 + WSL2 machine (spawn → OSC-9 parse → live SSE push →
 `list`/`watch` output, both hook commands, and the TUI's attach/render/
-input path). See `docs/sidebar-design.md` for the sidebar's design.
+input path), and separately verified on native Fedora Linux + KDE Plasma
+(systemd-managed daemon, TUI rendering under KWin/Wayland). See
+`docs/sidebar-design.md` for the sidebar's design.
 
-**Note:** `--distro` is optional everywhere it appears — if omitted,
-`wsl.exe` uses your system's actual default distro (`wsl.exe --status`),
-same as running `wsl.exe` with no `-d` yourself. Pass `--distro <name>`
-explicitly only if you want a *non-default* distro (check names with
-`wsl -l -v`).
+**Note:** `--distro` only matters when `wmux` itself runs on Windows and
+the session is meant to run inside WSL — it's optional there too: if
+omitted, `wsl.exe` uses your system's actual default distro (`wsl.exe
+--status`), same as running `wsl.exe` with no `-d` yourself. Pass
+`--distro <name>` explicitly only if you want a *non-default* distro
+(check names with `wsl -l -v`). On native Linux or native Windows, there's
+no WSL involved and this flag is a no-op.
 
 ## Layout
 
@@ -87,7 +91,33 @@ iwr https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.ps1 |
 Open a **new** terminal afterwards, then `wmux version` to confirm.
 Uninstall with `install/uninstall.ps1` (`-Purge` also removes
 `~/.wmux`'s session state/logs/settings). See MANUAL.md for the manual
-(no-script) install path, e.g. for the WSL-resident Linux build.
+(no-script) install path.
+
+## Installing (Linux)
+
+No installer script yet — build from source (Go 1.25+) or grab a
+published release archive:
+
+```bash
+git clone https://github.com/peterkure3/wmux.git && cd wmux
+go build -o bin/wmuxd ./cmd/wmuxd
+go build -o bin/wmux  ./cmd/wmux
+```
+
+Put `bin/` on your `PATH` (or symlink both binaries into somewhere that
+already is), then register `wmuxd` to start at login via a systemd
+`--user` unit:
+
+```bash
+wmux autostart install    # writes ~/.config/systemd/user/wmux-wmuxd.service,
+                           # then `systemctl --user enable --now`s it
+wmux autostart status      # systemctl --user status wmux-wmuxd
+wmux autostart uninstall
+```
+
+This is a genuinely native install — no WSL layer involved. `wmux
+version` confirms it's on your PATH; `wmux` with no arguments opens the
+multiplexer.
 
 ## Running it
 
@@ -98,10 +128,18 @@ run it from Task Scheduler — no console needed since it's headless):
 wmuxd.exe
 ```
 
-**Important:** if your agents (Claude Code / Codex) run inside a WSL2
-distro — the common case — run the Linux build of `wmuxd`/`wmux` (in
+On Linux, `wmux autostart install` (see "Installing (Linux)" above) is
+the equivalent — or run `wmuxd` directly in a terminal for a quick check
+before wiring up the systemd unit.
+
+**If your agents run inside WSL2** (Windows host, agents inside a distro
+— still a common setup): run the Linux build of `wmuxd`/`wmux` (in
 `bin/linux-amd64/`) *inside that distro* instead of the Windows build on
-the host. See "Wiring real agent hooks" below for why.
+the host. See "Wiring real agent hooks" below for why. This is separate
+from a genuinely native Linux install (no Windows host involved at all,
+e.g. running wmux directly on a Linux desktop) — both are first-class,
+they just answer different questions about where your agents actually
+run.
 
 ### The multiplexer (`wmux`, `wmux grid`)
 
@@ -260,7 +298,18 @@ pane and removes it from the layout.
 go build -o bin/wmuxd.exe ./cmd/wmuxd   # on Windows, or cross-compile:
 GOOS=windows GOARCH=amd64 go build -o bin/wmuxd.exe ./cmd/wmuxd
 GOOS=windows GOARCH=amd64 go build -o bin/wmux.exe  ./cmd/wmux
+
+go build -o bin/wmuxd ./cmd/wmuxd       # on Linux, or cross-compile:
+GOOS=linux GOARCH=amd64 go build -o bin/wmuxd ./cmd/wmuxd
+GOOS=linux GOARCH=amd64 go build -o bin/wmux  ./cmd/wmux
 ```
+
+`wmux update` automates this for an existing install (rebuild from a
+configured `--repo`/`WMUX_REPO`, swap the running binaries, restart the
+daemon) — or `wmux update --release latest` to install a published
+release instead of building locally (works on both platforms; the
+release workflow packages Windows as `.zip` and Linux as `.tar.gz`,
+handled transparently).
 
 CI (`.github/workflows/test.yml`) runs vet + build + tests on every push
 and PR — Linux with the race detector, plus a Windows runner. Pushing a
@@ -386,8 +435,18 @@ sidebar show them as `title: message`.
 
 Whichever `wmux hook run <agent>` command (or `hook-claude`/`hook-codex`
 alias) actually gets invoked runs **wherever the agent process itself
-runs**. If Claude Code / Codex run
-inside a WSL2 distro (the common case), the hook command needs a `wmux`
+runs**.
+
+**Genuinely native Linux (no Windows host at all)** — e.g. Claude Code
+running directly on a Linux desktop: none of the WSL networking
+discussion below applies. `wmuxd` and the hook command both run as
+ordinary Linux processes on the same machine, talking over ordinary
+`127.0.0.1` loopback, exactly as `localhost` HTTP normally works. Install
+per "Installing (Linux)" above and wire the hooks per "Wiring real agent
+hooks" above — that's the whole story.
+
+**WSL2 on a Windows host** — if Claude Code / Codex run
+inside a WSL2 distro (the common case there), the hook command needs a `wmux`
 binary reachable from inside that distro, and it needs to reach a `wmuxd`
 listening on `127.0.0.1:47823` from that same network namespace.
 

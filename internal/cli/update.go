@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -50,15 +49,12 @@ func cmdUpdate(args []string) {
 	noPull := fs.Bool("no-pull", false, "build the repo as-is without git pull")
 	release := fs.String("release", "", `install a published GitHub release instead of building from source: "latest" or a tag like v0.2.0`)
 	killSurfaces := fs.Bool("kill-surfaces", false, "proceed even if live surfaces exist — the wmuxd restart kills them")
+	force := fs.Bool("force", false, "install even if the target version looks older than what's currently running")
 	fs.Parse(args)
-
-	if runtime.GOOS != "windows" {
-		fatalUpdate("wmux update is Windows-only for now — inside WSL, update the linux binary manually (see MANUAL.md)")
-	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		fatalUpdate("could not resolve wmux.exe's own path: %v", err)
+		fatalUpdate("could not resolve wmux's own path: %v", err)
 	}
 	deployDir := filepath.Dir(exe)
 
@@ -111,6 +107,30 @@ func cmdUpdate(args []string) {
 		return
 	}
 
+	// Guard against silently installing something older than what's
+	// currently running — the real failure mode this closes: a machine
+	// with unreleased local commits (oldVer ahead of any tag) falls back
+	// to --release latest (e.g. because no --repo/WMUX_REPO is
+	// configured yet) and would otherwise downgrade to whatever the most
+	// recent published tag happens to be, with nothing printed to say
+	// so. resolveComparableVersion first tries to turn an unstamped
+	// build's raw VCS hash into a real git-describe string (via --repo,
+	// WMUX_REPO, or the cwd, in that order) so this isn't limited to
+	// only catching downgrades of already-stamped installs. If nothing
+	// resolves it, comparison is skipped rather than blocking — that
+	// case can't be told apart from a fresh/never-updated install.
+	comparableOld := resolveComparableVersion(oldVer, *repoFlag)
+	if cmp, comparable := compareVersions(comparableOld, newVer); comparable && cmp < 0 {
+		if !*force {
+			up.clear()
+			fatalUpdate("%s looks older than the currently running %s — refusing to downgrade (pass --force to override) — nothing was changed", newVer, oldVer)
+		}
+		up.clear()
+		fmt.Fprintf(os.Stderr, "wmux update: warning: installing %s over the newer-looking %s anyway (--force)\n", newVer, oldVer)
+	} else if !comparable {
+		fmt.Fprintf(os.Stderr, "wmux update: note: %q and/or %q isn't a parseable vX.Y.Z version, so freshness could not be verified\n", oldVer, newVer)
+	}
+
 	wasRunning := daemonRunning()
 	if wasRunning {
 		up.addSteps(2) // stop + restart wmuxd
@@ -160,23 +180,25 @@ func cmdUpdate(args []string) {
 		}
 	}
 
-	wmuxDest := filepath.Join(deployDir, "wmux.exe")
-	wmuxdDest := filepath.Join(deployDir, "wmuxd.exe")
+	wmuxName := wmuxBinaryName()
+	wmuxdName := wmuxdBinaryName()
+	wmuxDest := filepath.Join(deployDir, wmuxName)
+	wmuxdDest := filepath.Join(deployDir, wmuxdName)
 
 	up.step("installing binaries")
-	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, "wmuxd.exe"), wmuxdDest)
+	wmuxdAside, err := swapBinary(filepath.Join(stagingDir, wmuxdName), wmuxdDest)
 	if err != nil {
 		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
-		fatalUpdate("could not install wmuxd.exe: %v", err)
+		fatalUpdate("could not install %s: %v", wmuxdName, err)
 	}
-	wmuxAside, err := swapBinary(filepath.Join(stagingDir, "wmux.exe"), wmuxDest)
+	wmuxAside, err := swapBinary(filepath.Join(stagingDir, wmuxName), wmuxDest)
 	if err != nil {
 		// Roll BOTH back — never leave a version-skewed wmux/wmuxd pair.
 		restoreBinary(wmuxDest, wmuxAside)
 		restoreBinary(wmuxdDest, wmuxdAside)
 		restartOldDaemonAfterFailure(wasRunning, wmuxdDest)
-		fatalUpdate("could not install wmux.exe: %v", err)
+		fatalUpdate("could not install %s: %v", wmuxName, err)
 	}
 
 	// The old daemon has exited, so its aside copy usually deletes fine
@@ -223,7 +245,7 @@ func resolveRepo(flagVal string) (string, error) {
 		repo = defaultRepo
 	}
 	if repo == "" {
-		return "", fmt.Errorf("no source repo configured — pass --repo D:\\path\\to\\wmux or set WMUX_REPO")
+		return "", fmt.Errorf("no source repo configured — pass --repo /path/to/wmux or set WMUX_REPO")
 	}
 	// Sanity check: this must actually be the wmux repo before we build
 	// and install whatever it contains.
@@ -279,9 +301,9 @@ func gitDescribe(repo string) (string, error) {
 // linker splits the flag string on spaces and repo paths may contain them.
 func buildBinaries(repo, outDir, ver string) error {
 	builds := []struct{ out, pkg, ldflags string }{
-		{"wmux.exe", "./cmd/wmux", fmt.Sprintf(
+		{wmuxBinaryName(), "./cmd/wmux", fmt.Sprintf(
 			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s' -X 'main.defaultRepo=%s'", ver, repo)},
-		{"wmuxd.exe", "./cmd/wmuxd", fmt.Sprintf(
+		{wmuxdBinaryName(), "./cmd/wmuxd", fmt.Sprintf(
 			"-X 'github.com/peterkure3/wmux/internal/version.Version=%s'", ver)},
 	}
 	for _, b := range builds {
@@ -346,9 +368,10 @@ func stopDaemon() error {
 		// endpoint. Kill it hard — state.json is persisted after every
 		// mutation, so nothing is lost.
 		up.clear()
-		fmt.Fprintln(os.Stderr, "note: running wmuxd predates /shutdown; stopping it via taskkill")
-		if out, err := exec.Command("taskkill", "/F", "/IM", "wmuxd.exe").CombinedOutput(); err != nil {
-			return fmt.Errorf("taskkill wmuxd.exe failed: %v\n%s", err, strings.TrimSpace(string(out)))
+		name := wmuxdBinaryName()
+		fmt.Fprintf(os.Stderr, "note: running wmuxd predates /shutdown; stopping it via %s\n", killCommandLabel())
+		if out, err := exec.Command(killCommandName(), killCommandArgs(name)...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s failed: %v\n%s", killCommandLabel(), err, strings.TrimSpace(string(out)))
 		}
 	}
 	if !pollHealthz(5*time.Second, false) {
@@ -430,7 +453,7 @@ func restartOldDaemonAfterFailure(wasRunning bool, wmuxdPath string) {
 // session) may still hold one locked; it stays until a later update runs
 // after that process is gone.
 func cleanupOld(dir string) {
-	for _, pattern := range []string{"wmux.exe.old*", "wmuxd.exe.old*"} {
+	for _, pattern := range []string{wmuxBinaryName() + ".old*", wmuxdBinaryName() + ".old*"} {
 		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 		for _, m := range matches {
 			os.Remove(m)
