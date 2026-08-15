@@ -50,6 +50,16 @@ func cmdAttach(args []string) {
 		fmt.Fprintf(os.Stderr, "wmux attach: could not start %q: %v\n", cmdArgs[0], err)
 		os.Exit(1)
 	}
+	// Once started, never leave an untracked interactive child behind. A
+	// registration failure means wmux cannot safely offer lifecycle control.
+	stopUnregistered := func(code int, format string, args ...any) {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+		fmt.Fprintf(os.Stderr, format, args...)
+		os.Exit(code)
+	}
 
 	// Register only after Start() so the real PID can be included — this is
 	// what `wmux close` later uses to kill this exact process.
@@ -64,14 +74,12 @@ func cmdAttach(args []string) {
 	b, _ := json.Marshal(regReq)
 	resp, err := daemonPost("/sessions/register", "application/json", bytes.NewReader(b))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wmux attach: could not reach wmuxd (is it running?): %v\n", err)
-		os.Exit(3)
+		stopUnregistered(3, "wmux attach: could not reach wmuxd (is it running?): %v\n", err)
 	}
 	regBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "wmux attach: daemon returned %s: %s\n", resp.Status, string(regBody))
-		os.Exit(1)
+		stopUnregistered(1, "wmux attach: daemon returned %s: %s\n", resp.Status, string(regBody))
 	}
 
 	runErr := cmd.Wait()
@@ -79,7 +87,7 @@ func cmdAttach(args []string) {
 	// os.Exit skips deferred functions, so deregister explicitly on every
 	// exit path rather than relying on defer — a non-zero exit code below
 	// would otherwise silently leave the session marked "running" forever.
-	deregReq := proto.DeregisterSessionRequest{ID: id}
+	deregReq := proto.DeregisterSessionRequest{ID: id, PID: cmd.Process.Pid}
 	b, _ = json.Marshal(deregReq)
 	if resp, err := daemonPost("/sessions/deregister", "application/json", bytes.NewReader(b)); err == nil {
 		resp.Body.Close()

@@ -43,6 +43,8 @@ type Session struct {
 	sfc        *Surface  // non-nil for surface sessions (daemon-owned ConPTY; see surface.go)
 	job        jobHandle // process-tree kill handle; zero value off Windows (see jobobject_*.go)
 	wasSurface bool      // restored surface whose ConPTY died with the previous daemon run
+	restored   bool      // reconstructed from disk; killable only after identity re-validation (see Close)
+	ident      procIdent // creation marker + executable path of the tracked process; see identity.go
 	pid        int
 	native     bool
 	branch     string
@@ -65,6 +67,31 @@ func (s *Session) surfaceRef() *Surface {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sfc
+}
+
+// confirmIdentity re-checks that the process at pid still matches the
+// session's recorded identity (creation marker + executable path; see
+// identity.go). A live session — spawned or registered this daemon run —
+// is trustworthy and passes through; a restored session's PID outlived a
+// restart, so it is only confirmed when the process there is provably the
+// one the snapshot recorded. Unrecorded identity (state from before this
+// check existed) or a mismatch is refused: PID alone is not identity.
+func (s *Session) confirmIdentity(pid int) error {
+	s.mu.Lock()
+	restored := s.restored
+	ident := s.ident
+	s.mu.Unlock()
+	if !restored {
+		return nil
+	}
+	if ident.startTime == 0 || ident.exe == "" {
+		return fmt.Errorf("session %q was restored without a recorded process identity and cannot be safely closed by PID; stop it from its original terminal", s.ID)
+	}
+	cur, ok := processIdentity(pid)
+	if !ok || !sameProc(cur, ident) {
+		return fmt.Errorf("session %q's PID %d no longer matches its recorded process (the PID may have been reused); refusing to close", s.ID, pid)
+	}
+	return nil
 }
 
 func (s *Session) Info() proto.SessionInfo {
@@ -92,6 +119,9 @@ type Daemon struct {
 	// statePath is where sessions are persisted between restarts; empty
 	// disables persistence entirely.
 	statePath string
+	// saveMu serializes snapshot/write/rename. Concurrent metadata polling
+	// otherwise races through one state file and can publish stale state.
+	saveMu sync.Mutex
 
 	// token authenticates every request to the HTTP API except /healthz
 	// (see auth.go). Empty disables authentication entirely — for tests
@@ -328,6 +358,12 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 	}
 
 	sess := &Session{ID: id, Cwd: cwd, Distro: distro, pid: pid, native: native, running: true}
+	// Record the process identity now so a future daemon restart can tell
+	// this exact process from whatever the OS later puts at this PID.
+	// WSL-registered PIDs are invisible to processIdentity (they live in
+	// the distro's own namespace); a zero identity simply means the
+	// session is not restore-controllable, which is the safe answer.
+	sess.ident, _ = processIdentity(pid)
 	d.sessions[id] = sess
 	d.mu.Unlock()
 
@@ -341,12 +377,19 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 // Deregister marks a registered session as no longer running. It doesn't
 // remove the entry — `wmux list` still shows its last known state, same as
 // a Spawn-owned session after its process exits.
-func (d *Daemon) Deregister(id string) error {
+func (d *Daemon) Deregister(id string, pid int) error {
 	d.mu.RLock()
 	sess, ok := d.sessions[id]
 	d.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("session %q not found", id)
+	}
+	sess.mu.Lock()
+	currentPID := sess.pid
+	running := sess.running
+	sess.mu.Unlock()
+	if !running || currentPID != pid {
+		return fmt.Errorf("session %q no longer belongs to process %d", id, pid)
 	}
 	d.markExited(sess)
 	return nil
@@ -406,6 +449,16 @@ func (d *Daemon) Close(id string) error {
 	}
 	if pid == 0 {
 		return fmt.Errorf("session %q has no tracked process to close", id)
+	}
+	// A process ID recorded before a daemon restart is not process
+	// identity: operating systems reuse PIDs. Only kill a restored session
+	// if the process currently at pid still matches the creation time and
+	// executable path we recorded with it. Re-checking here rather than
+	// trusting the load-time verdict also covers a PID that was recycled
+	// between the restart and this close. An unrecorded identity (state
+	// written before this check existed) or a mismatch means no-go.
+	if err := sess.confirmIdentity(pid); err != nil {
+		return err
 	}
 
 	// Take the job handle *out* of the session rather than copying it: both
@@ -561,6 +614,10 @@ func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
 	sess.cmd = cmd
 	sess.pid = cmd.Process.Pid
 	sess.job = job
+	// Persist the process identity so a future restart can re-adopt this
+	// session safely (see identity.go) — the snapshot's PID alone is not
+	// proof the process is still the same one.
+	sess.ident, _ = processIdentity(cmd.Process.Pid)
 	sess.mu.Unlock()
 
 	d.safeGo("watchOutput:"+sess.ID, func() { d.watchOutput(sess, stdout) })

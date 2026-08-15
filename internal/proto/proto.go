@@ -123,7 +123,8 @@ type PruneResult struct {
 
 // DeregisterSessionRequest is the body for POST /sessions/deregister.
 type DeregisterSessionRequest struct {
-	ID string `json:"id"`
+	ID  string `json:"id"`
+	PID int    `json:"pid"`
 }
 
 // CloseSessionRequest is the body for POST /sessions/close — kills the

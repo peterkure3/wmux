@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -112,19 +114,35 @@ func TestLoadCorruptStateDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestSaveIsAtomic verifies the temp-file-and-rename dance leaves no
-// stray .tmp behind, and that the file it produces is loadable.
+// TestSaveIsAtomic verifies the temp-file-and-rename dance leaves no stray
+// temp file behind, produces a loadable file, and keeps private state modes.
 func TestSaveIsAtomic(t *testing.T) {
 	path := statePath(t)
 	d := New(path, "")
 	addSession(d, &Session{ID: "a", running: true})
 	d.save()
 
-	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Error("state.json.tmp left behind after save")
-	}
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		t.Fatalf("state file missing after save: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		// Windows has no Unix permission bits — os.Chmod only toggles the
+		// read-only attribute there, and Mode().Perm() always reports 0666.
+		// The 0600 contract is a Unix guarantee; on Windows the state file
+		// is protected by the user-profile ACL it lives under.
+		if runtime.GOOS != "windows" {
+			t.Errorf("state mode = %o, want 600", info.Mode().Perm())
+		}
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(path) {
+			t.Errorf("stray state temp file %q", entry.Name())
+		}
 	}
 }
 
@@ -144,6 +162,104 @@ func TestMarkExitedClearsPorts(t *testing.T) {
 	}
 	if len(info.Ports) != 0 {
 		t.Errorf("ports = %v, want empty", info.Ports)
+	}
+}
+
+// TestLoadIdentityUnconfirmedRestoresExited pins the identity rule in
+// load(): a live PID is not enough to restore a session as running. The
+// snapshot must also record an identity (creation time + executable) that
+// the process at that PID still matches — PIDs get reused by the OS. A
+// state file with no recorded identity (written by an older daemon) or a
+// mismatch restores the session as exited, never killable by number alone.
+func TestLoadIdentityUnconfirmedRestoresExited(t *testing.T) {
+	for _, name := range []string{"no-identity", "mismatched-identity"} {
+		t.Run(name, func(t *testing.T) {
+			var snap []persistedSession
+			switch name {
+			case "no-identity":
+				snap = []persistedSession{{
+					ID: "agent", Cwd: "/tmp", PID: os.Getpid(), Native: true, Running: true,
+				}}
+			case "mismatched-identity":
+				snap = []persistedSession{{
+					ID: "agent", Cwd: "/tmp", PID: os.Getpid(), Native: true, Running: true,
+					// Fabricated identity that can never match the live
+					// process — the PID-reuse scenario.
+					StartTime: 1, Exe: "/nonexistent/never-the-exe",
+				}}
+			}
+			path := statePath(t)
+			b, _ := json.Marshal(snap)
+			if err := os.WriteFile(path, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			d := New(path, "")
+			d.mu.RLock()
+			got := d.sessions["agent"]
+			d.mu.RUnlock()
+			if got == nil {
+				t.Fatal("session not restored at all")
+			}
+			if got.running {
+				t.Error("session restored running despite unconfirmed process identity")
+			}
+			if info := got.Info(); info.Running {
+				t.Error("SessionInfo.Running true for an identity-unconfirmed session")
+			}
+		})
+	}
+}
+
+// TestLoadIdentityConfirmedRestoresRunning is the positive half of the
+// identity rule: when the snapshot records this process's own identity
+// and that PID is alive and still matching, the session is restored as
+// running and controllable — the daemon restart case that is meant to
+// survive.
+func TestLoadIdentityConfirmedRestoresRunning(t *testing.T) {
+	ident, ok := processIdentity(os.Getpid())
+	if !ok {
+		t.Skip("platform provides no process identity")
+	}
+	path := statePath(t)
+	snap := []persistedSession{{
+		ID: "agent", Cwd: "/tmp", PID: os.Getpid(), Native: true, Running: true,
+		StartTime: ident.startTime, Exe: ident.exe,
+	}}
+	b, _ := json.Marshal(snap)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	d := New(path, "")
+	d.mu.RLock()
+	got := d.sessions["agent"]
+	d.mu.RUnlock()
+	if got == nil {
+		t.Fatal("session not restored at all")
+	}
+	if !got.running {
+		t.Error("identity-confirmed live session not restored running")
+	}
+	// ...and Close's gate accepts it: confirmed identity is what makes a
+	// restored session controllable again.
+	if err := got.confirmIdentity(os.Getpid()); err != nil {
+		t.Errorf("confirmIdentity rejected a matching process: %v", err)
+	}
+}
+
+// TestConfirmIdentityRefusesMismatch is the refusal half of Close's gate,
+// tested without actually killing anything: a restored session whose PID
+// now belongs to a process with a different identity must never pass.
+func TestConfirmIdentityRefusesMismatch(t *testing.T) {
+	ident, ok := processIdentity(os.Getpid())
+	if !ok {
+		t.Skip("platform provides no process identity")
+	}
+	wrong := procIdent{startTime: ident.startTime + 1, exe: ident.exe}
+	sess := &Session{ID: "agent", pid: os.Getpid(), running: true, restored: true, ident: wrong}
+	if err := sess.confirmIdentity(os.Getpid()); err == nil {
+		t.Error("confirmIdentity accepted a mismatched process identity")
 	}
 }
 

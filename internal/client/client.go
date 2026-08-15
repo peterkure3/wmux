@@ -307,9 +307,11 @@ func (c *Client) Register(req proto.RegisterSessionRequest) (proto.SessionInfo, 
 	return info, err
 }
 
-// Deregister is POST /sessions/deregister.
-func (c *Client) Deregister(id string) error {
-	return c.postJSON("/sessions/deregister", proto.DeregisterSessionRequest{ID: id}, nil, http.StatusOK)
+// Deregister is POST /sessions/deregister. pid binds this cleanup request
+// to the process that registered the session, preventing an old attach
+// instance from deregistering a newly reused ID.
+func (c *Client) Deregister(id string, pid int) error {
+	return c.postJSON("/sessions/deregister", proto.DeregisterSessionRequest{ID: id, PID: pid}, nil, http.StatusOK)
 }
 
 // CloseSession is POST /sessions/close.

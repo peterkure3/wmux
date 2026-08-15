@@ -21,7 +21,20 @@ import (
 const (
 	defaultSurfaceCols = 120
 	defaultSurfaceRows = 30
+	maxSurfaceCols     = 500
+	maxSurfaceRows     = 300
+	maxSurfaceCells    = maxSurfaceCols * maxSurfaceRows
 )
+
+func validSurfaceSize(cols, rows int) error {
+	if cols < 2 || rows < 2 {
+		return fmt.Errorf("size %dx%d too small", cols, rows)
+	}
+	if cols > maxSurfaceCols || rows > maxSurfaceRows || cols > maxSurfaceCells/rows {
+		return fmt.Errorf("size %dx%d exceeds maximum %dx%d", cols, rows, maxSurfaceCols, maxSurfaceRows)
+	}
+	return nil
+}
 
 // Surface is the daemon-owned side of a ConPTY session: the daemon holds
 // the pseudo-terminal and feeds its output through a VT emulator, so it
@@ -71,8 +84,12 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	}
 
 	cols, rows := req.Cols, req.Rows
-	if cols < 2 || rows < 2 {
+	if cols == 0 && rows == 0 {
 		cols, rows = defaultSurfaceCols, defaultSurfaceRows
+	}
+	if err := validSurfaceSize(cols, rows); err != nil {
+		d.releaseID(sess)
+		return nil, err
 	}
 
 	p, err := pty.New()
@@ -118,6 +135,10 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	sess.pid = cmd.Process.Pid
 	sess.sfc = sfc
 	sess.job = job
+	// Surfaces cannot survive a restart (load() always restores them as
+	// exited — their ConPTY died with the old daemon), but record the
+	// identity anyway so the snapshot stays self-describing.
+	sess.ident, _ = processIdentity(cmd.Process.Pid)
 	sess.mu.Unlock()
 
 	d.safeGo("readSurface:"+sess.ID, func() { d.readSurface(sess) })
@@ -187,10 +208,7 @@ func (d *Daemon) readSurface(sess *Session) {
 			sfc.emu.Write(chunk)
 			frame := proto.SurfaceFrame{Type: proto.FrameOutput, Data: append([]byte(nil), chunk...)}
 			for ch := range sfc.clients {
-				select {
-				case ch <- frame:
-				default: // slow client; drop rather than block the pty reader
-				}
+				sfc.sendByteFrameLocked(ch, frame)
 			}
 			sfc.broadcastCellsUpdateLocked()
 			sfc.mu.Unlock()
@@ -220,16 +238,12 @@ func (d *Daemon) reapSurface(sess *Session) {
 	sfc.mu.Lock()
 	sfc.exited = true
 	for ch := range sfc.clients {
-		select {
-		case ch <- proto.SurfaceFrame{Type: proto.FrameExit}:
-		default:
-		}
+		drainSurfaceFrames(ch)
+		ch <- proto.SurfaceFrame{Type: proto.FrameExit}
 	}
 	for ch := range sfc.cellClients {
-		select {
-		case ch <- proto.CellsFrame{Type: proto.CellsExit}:
-		default:
-		}
+		drainCellsFrames(ch)
+		ch <- proto.CellsFrame{Type: proto.CellsExit}
 	}
 	sfc.mu.Unlock()
 
@@ -390,8 +404,8 @@ func (d *Daemon) ResizeSurface(id string, cols, rows int) error {
 	if err != nil {
 		return err
 	}
-	if cols < 2 || rows < 2 {
-		return fmt.Errorf("size %dx%d too small", cols, rows)
+	if err := validSurfaceSize(cols, rows); err != nil {
+		return err
 	}
 
 	sfc.mu.Lock()
@@ -410,20 +424,58 @@ func (d *Daemon) ResizeSurface(id string, cols, rows int) error {
 		Data: sfc.replayLocked(),
 	}
 	for ch := range sfc.clients {
-		select {
-		case ch <- frame:
-		default:
-		}
+		sfc.sendByteFrameLocked(ch, frame)
 	}
 
 	cellsFrame := sfc.cellsReplayFrameLocked()
 	for ch := range sfc.cellClients {
-		select {
-		case ch <- cellsFrame:
-		default:
-		}
+		sfc.sendCellsFrameLocked(ch, cellsFrame)
 	}
 	return nil
+}
+
+// sendByteFrameLocked preserves a byte client's terminal state. If it has
+// fallen behind, arbitrary raw chunks cannot be discarded because an ANSI
+// escape sequence may be split across them. Replace its queue with a full
+// emulator replay instead. Caller holds s.mu.
+func (s *Surface) sendByteFrameLocked(ch chan proto.SurfaceFrame, frame proto.SurfaceFrame) {
+	select {
+	case ch <- frame:
+		return
+	default:
+		drainSurfaceFrames(ch)
+		ch <- proto.SurfaceFrame{Type: proto.FrameReplay, Cols: s.cols, Rows: s.rows, Data: s.replayLocked()}
+	}
+}
+
+func (s *Surface) sendCellsFrameLocked(ch chan proto.CellsFrame, frame proto.CellsFrame) {
+	select {
+	case ch <- frame:
+		return
+	default:
+		drainCellsFrames(ch)
+		ch <- s.cellsReplayFrameLocked()
+	}
+}
+
+func drainSurfaceFrames(ch chan proto.SurfaceFrame) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func drainCellsFrames(ch chan proto.CellsFrame) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
 }
 
 // replayLocked serializes the emulator's current screen into an ANSI
@@ -587,10 +639,7 @@ func (s *Surface) broadcastCellsUpdateLocked() {
 	cursor, visible := s.cellsCursorLocked()
 	frame := proto.CellsFrame{Type: proto.CellsUpdate, Rows: changed, Cursor: cursor, Visible: visible}
 	for ch := range s.cellClients {
-		select {
-		case ch <- frame:
-		default: // slow client; drop rather than block the pty reader
-		}
+		s.sendCellsFrameLocked(ch, frame)
 	}
 }
 

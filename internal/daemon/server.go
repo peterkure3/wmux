@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +11,29 @@ import (
 
 	"github.com/peterkure3/wmux/internal/proto"
 )
+
+const (
+	maxJSONBody     = 1 << 20 // commands and hook payloads; protects daemon allocations
+	maxSurfaceInput = 64 << 10
+)
+
+// decodeJSON accepts exactly one bounded JSON value. Every daemon endpoint
+// is local but authenticated callers must still not be able to make it
+// allocate unbounded request bodies.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
 
 // authHeader is the request header carrying the shared token. Kept as a
 // local const so package daemon doesn't import the CLI-facing authtoken
@@ -118,7 +142,7 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleSpawnSession(w http.ResponseWriter, r *http.Request) {
 	var req proto.NewSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -134,7 +158,7 @@ func (d *Daemon) handleSpawnSession(w http.ResponseWriter, r *http.Request) {
 // for, without the daemon spawning or piping the process itself.
 func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req proto.RegisterSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -150,11 +174,11 @@ func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 // called by `wmux attach` right before it exits.
 func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
 	var req proto.DeregisterSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := d.Deregister(req.ID); err != nil {
+	if err := d.Deregister(req.ID, req.PID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -164,7 +188,7 @@ func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
 // handleClose kills a session's tracked process — called by `wmux close`.
 func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 	var req proto.CloseSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -187,7 +211,7 @@ func (d *Daemon) handlePrune(w http.ResponseWriter, r *http.Request) {
 // script running in a different process than the shell wmuxd is tailing).
 func (d *Daemon) handleNotify(w http.ResponseWriter, r *http.Request) {
 	var evt proto.NotifyEvent
-	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+	if err := decodeJSON(w, r, &evt, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -247,7 +271,7 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 // `wmux surface`.
 func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
 	var req proto.NewSurfaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -334,8 +358,12 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 // handleSurfaceInput writes client keystrokes to a surface's pty.
 func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
 	var req proto.SurfaceInputRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxSurfaceInput); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(req.Data) > maxSurfaceInput {
+		http.Error(w, "surface input too large", http.StatusBadRequest)
 		return
 	}
 	if err := d.InputSurface(req.ID, req.Data); err != nil {
@@ -349,7 +377,7 @@ func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
 // attached client then receives a fresh replay at the new size.
 func (d *Daemon) handleSurfaceResize(w http.ResponseWriter, r *http.Request) {
 	var req proto.SurfaceResizeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, maxJSONBody); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

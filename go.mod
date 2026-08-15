@@ -2,8 +2,15 @@ module github.com/peterkure3/wmux
 
 go 1.25.0
 
+// Forced to the patched toolchain: the plain "go 1.25.0" floor would let a
+// bare `go build` silently use a vulnerable standard library (crypto/tls,
+// net/http, net/url, encoding/asn1). Setting a toolchain means every build
+// and test in this module runs on go1.26.6+.
+toolchain go1.26.6
+
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/alecthomas/kong v1.16.0
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -16,7 +23,6 @@ require (
 )
 
 require (
-	github.com/alecthomas/kong v1.16.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
