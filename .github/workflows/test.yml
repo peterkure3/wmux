@@ -31,6 +31,16 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.6'
+
+      # The Linux installer scripts are POSIX sh (they run under dash on
+      # Ubuntu, busybox ash on WSL). bash -n catches syntax errors; dash
+      # -n is the stricter check that also rejects bashisms.
+      - run: bash -n install/install.sh install/uninstall.sh
+      - run: |
+          if command -v dash >/dev/null 2>&1; then
+            dash -n install/install.sh install/uninstall.sh
+          fi
+
       - run: go mod verify
 
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

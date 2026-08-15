@@ -41,7 +41,8 @@ internal/agentprofile/ per-agent hook profiles (TOML) + launch commands
 internal/wmuxlog/ structured logger (log/slog, JSON + rotation) — see docs/logger-design.md
 internal/proto/   shared wire types
 bin/              prebuilt binaries (windows-amd64, linux-amd64)
-install/          Windows installer script (install.ps1/uninstall.ps1)
+install/          one-command installers (install.ps1/uninstall.ps1 for Windows,
+                  install.sh/uninstall.sh for Linux)
 gui/              Kotlin/Compose Desktop native GUI client (wmuxd HTTP API), separate Gradle build — see gui/README.md
 ```
 
@@ -95,7 +96,23 @@ Uninstall with `install/uninstall.ps1` (`-Purge` also removes
 
 ## Installing (Linux)
 
-No installer script yet — build from source (Go 1.25+) or grab a
+No admin rights needed — installs to `~/.local/bin`, registers `wmuxd`
+to start at logon via a systemd `--user` unit:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.sh | sh
+```
+
+(wget users: `wget -qO- https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.sh | sh`.) Then `wmux version` to confirm.
+Uninstall with `install/uninstall.sh` (`--purge` also removes
+`~/.wmux`'s session state/logs/settings). Options: `--version TAG`,
+`--dir DIR`, `--no-autostart`.
+
+If systemd `--user` isn't available (e.g. WSL without systemd enabled),
+the install still succeeds; autostart just gets skipped with a warning —
+run `wmux autostart install` later, or start `wmuxd` manually.
+
+Manual (no-script) install path — build from source (Go 1.25+) or grab a
 published release archive:
 
 ```bash
@@ -585,3 +602,13 @@ daemon, it's only the hook direction that needs mirrored mode.
     real published release; caught a real bug doing so (GitHub serves
     `SHA256SUMS` as `application/octet-stream`, so `Invoke-WebRequest`'s
     `.Content` came back as a raw byte array instead of a string).
+12. ~~**Linux installer**~~ — done: `install/install.sh` mirrors
+    `install.ps1` for Linux (POSIX sh, so it runs under dash and busybox
+    ash): downloads the latest GitHub release's `linux-amd64` tarball,
+    verifies it against the release's `SHA256SUMS`, installs to
+    `~/.local/bin`, and registers `wmuxd` autostart via the existing
+    systemd `--user` unit (`wmux autostart install`) — degraded
+    gracefully to a warning where systemd isn't available, e.g. WSL
+    without systemd enabled. `install/uninstall.sh` reverses it
+    (`--purge` also removes `~/.wmux`). One-liner:
+    `curl -fsSL https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.sh | sh`.
