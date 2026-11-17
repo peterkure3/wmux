@@ -85,11 +85,11 @@ func (s *Session) confirmIdentity(pid int) error {
 		return nil
 	}
 	if ident.startTime == 0 || ident.exe == "" {
-		return fmt.Errorf("session %q was restored without a recorded process identity and cannot be safely closed by PID; stop it from its original terminal", s.ID)
+		return conflictf("session %q was restored without a recorded process identity and cannot be safely closed by PID; stop it from its original terminal", s.ID)
 	}
 	cur, ok := processIdentity(pid)
 	if !ok || !sameProc(cur, ident) {
-		return fmt.Errorf("session %q's PID %d no longer matches its recorded process (the PID may have been reused); refusing to close", s.ID, pid)
+		return conflictf("session %q's PID %d no longer matches its recorded process (the PID may have been reused); refusing to close", s.ID, pid)
 	}
 	return nil
 }
@@ -314,7 +314,7 @@ func (d *Daemon) reserveID(sess *Session) error {
 		stillRunning := existing.running
 		existing.mu.Unlock()
 		if stillRunning {
-			return fmt.Errorf("session %q is already running", sess.ID)
+			return conflictf("session %q is already running", sess.ID)
 		}
 		// The existing entry has exited — fall through and replace it, so
 		// the same session ID can be reused across restarts of the agent.
@@ -344,6 +344,9 @@ func (d *Daemon) releaseID(sess *Session) {
 // under this ID. Used when the actual interactive terminal needs to stay
 // attached to a real console/pty rather than a daemon-owned pipe.
 func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Session, error) {
+	if id == "" || pid < 0 {
+		return nil, invalidf("registration needs an id and a non-negative pid")
+	}
 	d.mu.Lock()
 	if existing, exists := d.sessions[id]; exists {
 		existing.mu.Lock()
@@ -351,7 +354,7 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 		existing.mu.Unlock()
 		if stillRunning {
 			d.mu.Unlock()
-			return nil, fmt.Errorf("session %q is already running", id)
+			return nil, conflictf("session %q is already running", id)
 		}
 		// existing entry has exited — fall through and replace it, so the
 		// same session ID can be reused across restarts of the same agent.
@@ -378,18 +381,21 @@ func (d *Daemon) Register(id, cwd, distro string, pid int, native bool) (*Sessio
 // remove the entry — `wmux list` still shows its last known state, same as
 // a Spawn-owned session after its process exits.
 func (d *Daemon) Deregister(id string, pid int) error {
+	if id == "" || pid < 0 {
+		return invalidf("deregistration needs an id and a non-negative pid")
+	}
 	d.mu.RLock()
 	sess, ok := d.sessions[id]
 	d.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return notFoundf("session %q not found", id)
 	}
 	sess.mu.Lock()
 	currentPID := sess.pid
 	running := sess.running
 	sess.mu.Unlock()
 	if !running || currentPID != pid {
-		return fmt.Errorf("session %q no longer belongs to process %d", id, pid)
+		return conflictf("session %q no longer belongs to process %d", id, pid)
 	}
 	d.markExited(sess)
 	return nil
@@ -427,11 +433,14 @@ func (d *Daemon) Prune() []string {
 // unwinds with it, at which point the "wmux" WT profile's
 // closeOnExit:"always" removes the pane from the layout entirely.
 func (d *Daemon) Close(id string) error {
+	if id == "" {
+		return invalidf("close needs an id")
+	}
 	d.mu.RLock()
 	sess, ok := d.sessions[id]
 	d.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return notFoundf("session %q not found", id)
 	}
 
 	// Validate first, then take ownership. Taking the job handle out before
@@ -445,10 +454,10 @@ func (d *Daemon) Close(id string) error {
 	sess.mu.Unlock()
 
 	if !running {
-		return fmt.Errorf("session %q is not running", id)
+		return conflictf("session %q is not running", id)
 	}
 	if pid == 0 {
-		return fmt.Errorf("session %q has no tracked process to close", id)
+		return conflictf("session %q has no tracked process to close", id)
 	}
 	// A process ID recorded before a daemon restart is not process
 	// identity: operating systems reuse PIDs. Only kill a restored session
@@ -576,6 +585,9 @@ func killInWSL(distro string, pid int) error {
 // Spawn starts a new agent session and begins watching its combined
 // stdout/stderr stream for notification escape sequences.
 func (d *Daemon) Spawn(req proto.NewSessionRequest) (*Session, error) {
+	if req.ID == "" || req.Command == "" {
+		return nil, invalidf("session needs id and command")
+	}
 	sess := &Session{
 		ID: req.ID, Cwd: req.Cwd, Distro: req.Distro, Command: req.Command,
 		native: runtime.GOOS != "windows", running: true,

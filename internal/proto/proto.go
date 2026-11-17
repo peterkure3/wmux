@@ -13,6 +13,10 @@ import "time"
 // new wmuxd.exe when the auth token scheme landed.
 const ProtocolVersion = 1
 
+// MaxEventLineBytes allows a 1 MiB notification request to expand during
+// JSON escaping (up to six bytes per input byte), plus envelope/SSE overhead.
+const MaxEventLineBytes = 8 << 20
+
 // IdentifyResponse is the body of GET /identify. Unlike every other route,
 // /identify is exempt from token auth (see /healthz) — it exists
 // specifically to be reachable when something else about the connection is

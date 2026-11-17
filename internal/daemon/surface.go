@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"image/color"
+	"io"
 	"log/slog"
 	"os/exec"
 	"reflect"
@@ -28,10 +29,10 @@ const (
 
 func validSurfaceSize(cols, rows int) error {
 	if cols < 2 || rows < 2 {
-		return fmt.Errorf("size %dx%d too small", cols, rows)
+		return invalidf("size %dx%d too small", cols, rows)
 	}
 	if cols > maxSurfaceCols || rows > maxSurfaceRows || cols > maxSurfaceCells/rows {
-		return fmt.Errorf("size %dx%d exceeds maximum %dx%d", cols, rows, maxSurfaceCols, maxSurfaceRows)
+		return invalidf("size %dx%d exceeds maximum %dx%d", cols, rows, maxSurfaceCols, maxSurfaceRows)
 	}
 	return nil
 }
@@ -69,7 +70,7 @@ type Surface struct {
 // shows up in `wmux list`/the sidebar like any other session.
 func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	if req.ID == "" || req.Command == "" {
-		return nil, fmt.Errorf("surface needs id and command")
+		return nil, invalidf("surface needs id and command")
 	}
 
 	// Claim the ID before allocating anything, so a concurrent request for
@@ -141,6 +142,13 @@ func (d *Daemon) SpawnSurface(req proto.NewSurfaceRequest) (*Session, error) {
 	sess.ident, _ = processIdentity(cmd.Process.Pid)
 	sess.mu.Unlock()
 
+	// VT replies (DSR/DA) are delivered through an unbuffered input pipe.
+	// Drain it independently: parsing a query otherwise blocks with mu held.
+	d.safeGo("terminalReplies:"+sess.ID, func() {
+		if _, err := io.Copy(sfc.pty, sfc.emu); err != nil {
+			slog.Debug("terminal reply stream closed", "id", sess.ID, "err", err)
+		}
+	})
 	d.safeGo("readSurface:"+sess.ID, func() { d.readSurface(sess) })
 	d.safeGo("reapSurface:"+sess.ID, func() { d.reapSurface(sess) })
 	d.safeGo("pollMetadata:"+sess.ID, func() { d.pollMetadata(sess) })
@@ -196,6 +204,9 @@ func (d *Daemon) readSurface(sess *Session) {
 	if sfc == nil {
 		return
 	}
+	// Close the pipe itself instead of Emulator.Close: the latter mutates
+	// an unsynchronized closed flag read by the concurrent reply pump.
+	defer sfc.emu.InputPipe().(io.Closer).Close()
 	buf := make([]byte, 8192)
 	var pending []byte
 
@@ -247,6 +258,7 @@ func (d *Daemon) reapSurface(sess *Session) {
 	}
 	sfc.mu.Unlock()
 
+	sfc.emu.InputPipe().(io.Closer).Close()
 	sfc.pty.Close()
 
 	// The tree is gone; drop the job handle so it isn't held for the life
@@ -269,11 +281,14 @@ func (d *Daemon) reapSurface(sess *Session) {
 // surface looks up a session's surface, or errors if the session doesn't
 // exist, isn't a surface, or has already exited.
 func (d *Daemon) surface(id string) (*Session, *Surface, error) {
+	if id == "" {
+		return nil, nil, invalidf("surface needs an id")
+	}
 	d.mu.RLock()
 	sess, ok := d.sessions[id]
 	d.mu.RUnlock()
 	if !ok {
-		return nil, nil, fmt.Errorf("session %q not found", id)
+		return nil, nil, notFoundf("session %q not found", id)
 	}
 	sfc := sess.surfaceRef()
 	if sfc == nil {
@@ -281,15 +296,15 @@ func (d *Daemon) surface(id string) (*Session, *Surface, error) {
 		wasSurface := sess.wasSurface
 		sess.mu.Unlock()
 		if wasSurface {
-			return nil, nil, fmt.Errorf("surface %q did not survive a daemon restart (its ConPTY died with the old wmuxd process)", id)
+			return nil, nil, conflictf("surface %q did not survive a daemon restart (its ConPTY died with the old wmuxd process)", id)
 		}
-		return nil, nil, fmt.Errorf("session %q is not a surface (created by wmux new/attach, not wmux surface)", id)
+		return nil, nil, conflictf("session %q is not a surface (created by wmux new/attach, not wmux surface)", id)
 	}
 	sfc.mu.Lock()
 	exited := sfc.exited
 	sfc.mu.Unlock()
 	if exited {
-		return nil, nil, fmt.Errorf("surface %q has exited", id)
+		return nil, nil, conflictf("surface %q has exited", id)
 	}
 	return sess, sfc, nil
 }
@@ -400,11 +415,11 @@ func (d *Daemon) InputSurface(id string, data []byte) error {
 // same ordered stream, so clients repaint without a gap (the cmux-tui
 // protocol's "resized" behavior).
 func (d *Daemon) ResizeSurface(id string, cols, rows int) error {
-	_, sfc, err := d.surface(id)
-	if err != nil {
+	if err := validSurfaceSize(cols, rows); err != nil {
 		return err
 	}
-	if err := validSurfaceSize(cols, rows); err != nil {
+	_, sfc, err := d.surface(id)
+	if err != nil {
 		return err
 	}
 

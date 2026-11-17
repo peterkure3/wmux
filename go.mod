@@ -1,12 +1,10 @@
 module github.com/peterkure3/wmux
 
-go 1.25.0
+go 1.26.10
 
-// Forced to the patched toolchain: the plain "go 1.25.0" floor would let a
-// bare `go build` silently use a vulnerable standard library (crypto/tls,
-// net/http, net/url, encoding/asn1). Setting a toolchain means every build
-// and test in this module runs on go1.26.6+.
-toolchain go1.26.6
+// Keep the minimum and preferred toolchains on security-patched releases.
+// The toolchain directive is a preference, not an exact compiler pin.
+toolchain go1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0

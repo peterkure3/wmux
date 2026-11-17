@@ -46,6 +46,7 @@ func cmdSurface(args []string) {
 		cmd = defaultShellCommand(*native)
 	}
 
+	startForTerminal()
 	req := proto.NewSurfaceRequest{
 		ID: resolveSessionID(*id, dir), Cwd: dir, Command: cmd,
 		Distro: *distro, Native: *native,

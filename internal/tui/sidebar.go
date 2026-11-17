@@ -82,7 +82,7 @@ func sseListen(ch chan<- proto.Event) {
 		resp, err := daemonStream("/events")
 		if err == nil {
 			scanner := bufio.NewScanner(resp.Body)
-			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			scanner.Buffer(make([]byte, 0, 64*1024), proto.MaxEventLineBytes)
 			for scanner.Scan() {
 				line := scanner.Text()
 				if strings.HasPrefix(line, "data: ") {

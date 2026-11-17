@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -62,9 +63,24 @@ func cmdWatch(args []string) {
 		os.Exit(3)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "wmux watch: %s\n", describeStatus(resp))
+		os.Exit(3)
+	}
 
 	fmt.Println("watching for notifications... (Ctrl+C to stop)")
-	scanner := bufio.NewScanner(resp.Body)
+	if err := watchNotifications(resp.Body, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "wmux watch: %v; restart watch to reconnect\n", err)
+		os.Exit(3)
+	}
+}
+
+// watchNotifications fails visibly on disconnect rather than silently losing
+// notifications. Reconnection is explicit: SSE has no replay/event IDs, so
+// silently retrying could imply a delivery guarantee the daemon cannot provide.
+func watchNotifications(body io.Reader, out io.Writer) error {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), proto.MaxEventLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) > 6 && line[:6] == "data: " {
@@ -76,10 +92,16 @@ func cmdWatch(args []string) {
 				if n.Dropped > 0 {
 					missed = fmt.Sprintf("  (+%d earlier missed)", n.Dropped)
 				}
-				fmt.Printf("[%s] %s: %s%s\n", n.Time.Format("15:04:05"), n.SessionID, n.Display(), missed)
+				if _, err := fmt.Fprintf(out, "[%s] %s: %s%s\n", n.Time.Format("15:04:05"), n.SessionID, n.Display(), missed); err != nil {
+					return err
+				}
 			}
 			// "sessions" lifecycle events are for UI clients (wmux sidebar);
 			// watch stays a notification tail.
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("notification stream: %w", err)
+	}
+	return fmt.Errorf("notification stream disconnected")
 }

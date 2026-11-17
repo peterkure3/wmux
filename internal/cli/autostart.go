@@ -17,13 +17,12 @@ func cmdAutostart(args []string) {
 		os.Exit(2)
 	}
 
-	wmuxd, err := siblingWmuxd()
-	if err != nil {
-		fatalAutostart("%v", err)
-	}
-
 	switch args[0] {
 	case "install":
+		wmuxd, err := siblingWmuxd()
+		if err != nil {
+			fatalAutostart("%v", err)
+		}
 		if err := installAutostart(wmuxd); err != nil {
 			fatalAutostart("%v", err)
 		}

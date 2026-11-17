@@ -30,6 +30,7 @@ const maxGridPanes = 16
 // runTUI is the shared tail of every TUI launcher: point the TUI at the
 // same daemon the CLI uses, then hand over the terminal.
 func runTUI(cmdName string, opts tui.Options) {
+	startForTerminal()
 	tui.SetClient(dc())
 	if err := tui.Run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "wmux %s: %v\n", cmdName, err)

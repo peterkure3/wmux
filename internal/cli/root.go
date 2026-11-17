@@ -85,6 +85,7 @@ func usage() {
                                           --release install a published GitHub release (SHA256-verified;
                                           also the automatic fallback when no source repo is configured)
                                           (refuses while live surfaces exist unless --kill-surfaces)
+  wmux daemon start                     start wmuxd quietly in the background, on demand
   wmux autostart install|uninstall|status
                                           register/remove wmuxd as a Task Scheduler logon task
   wmux version                           print the wmux version`)

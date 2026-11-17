@@ -40,6 +40,7 @@ func cmdAttach(args []string) {
 	dir := resolveCwd(*cwd)
 	id := resolveSessionID(*idFlag, dir)
 
+	startForTerminal()
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
@@ -124,6 +125,7 @@ func cmdNew(args []string) {
 		os.Exit(2)
 	}
 
+	startForTerminal()
 	req := proto.NewSessionRequest{ID: resolveSessionID(*id, dir), Cwd: dir, Command: cmd, Distro: *distro}
 	b, _ := json.Marshal(req)
 

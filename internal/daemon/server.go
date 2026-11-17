@@ -148,7 +148,7 @@ func (d *Daemon) handleSpawnSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := d.Spawn(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeAPIError(w, err)
 		return
 	}
 	json.NewEncoder(w).Encode(sess.Info())
@@ -164,7 +164,7 @@ func (d *Daemon) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := d.Register(req.ID, req.Cwd, req.Distro, req.PID, req.Native)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeAPIError(w, err)
 		return
 	}
 	json.NewEncoder(w).Encode(sess.Info())
@@ -179,7 +179,7 @@ func (d *Daemon) handleDeregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Deregister(req.ID, req.PID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAPIError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -193,7 +193,7 @@ func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Close(req.ID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAPIError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -277,7 +277,7 @@ func (d *Daemon) handleSurfaces(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := d.SpawnSurface(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeAPIError(w, err)
 		return
 	}
 	json.NewEncoder(w).Encode(sess.Info())
@@ -309,7 +309,7 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("mode") == "cells" {
 		ch, err := d.AttachSurfaceCells(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeAPIError(w, err)
 			return
 		}
 		defer d.DetachSurfaceCells(id, ch)
@@ -333,7 +333,7 @@ func (d *Daemon) handleSurfaceAttach(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := d.AttachSurface(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAPIError(w, err)
 		return
 	}
 	defer d.DetachSurface(id, ch)
@@ -367,7 +367,7 @@ func (d *Daemon) handleSurfaceInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.InputSurface(req.ID, req.Data); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAPIError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -382,7 +382,7 @@ func (d *Daemon) handleSurfaceResize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.ResizeSurface(req.ID, req.Cols, req.Rows); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeAPIError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

@@ -3,8 +3,8 @@
 .SYNOPSIS
     Installs wmux: downloads a published GitHub release, places
     wmux.exe/wmuxd.exe under %LOCALAPPDATA%\Programs\wmux, adds that
-    directory to the current user's PATH, and (by default) registers wmuxd
-    to start at logon.
+    directory to the current user's PATH. Daemon startup is on demand unless
+    -Autostart is explicitly selected.
 
 .DESCRIPTION
     No admin rights needed — everything here is per-user (user PATH,
@@ -21,8 +21,10 @@
     Where to place wmux.exe/wmuxd.exe. Default: %LOCALAPPDATA%\Programs\wmux.
 
 .PARAMETER NoAutostart
-    Skip registering the Task Scheduler autostart entry (and skip starting
-    wmuxd now). You can run `wmux autostart install` yourself later.
+    Retained for compatibility. Startup is on demand by default.
+
+.PARAMETER Autostart
+    Explicitly opt into logon startup. Omit this for terminal-only daemon startup.
 
 .EXAMPLE
     iwr https://raw.githubusercontent.com/peterkure3/wmux/main/install/install.ps1 | iex
@@ -33,7 +35,8 @@
 param(
     [string]$Version = "latest",
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\wmux",
-    [switch]$NoAutostart
+    [switch]$NoAutostart,
+    [switch]$Autostart
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,11 +136,11 @@ if ($pathEntries -notcontains $InstallDir) {
     $env:Path = "$env:Path;$InstallDir"
 }
 
-if (-not $NoAutostart) {
+if ($Autostart -and -not $NoAutostart) {
     Write-Host "Registering wmuxd autostart..."
     & (Join-Path $InstallDir "wmux.exe") autostart install
 } else {
-    Write-Host "Skipped autostart (-NoAutostart) -- run 'wmux autostart install' later to enable it."
+    Write-Host "No boot/logon startup registered. Run wmux in your terminal to start its daemon quietly."
 }
 
 Write-Host ""

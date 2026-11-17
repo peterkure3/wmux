@@ -58,10 +58,15 @@ handle; `slog.SetDefault` makes that unnecessary.
 converge on one file regardless of launch method (detached, Task
 Scheduler, or manual foreground).
 
-Rotation is size-based and manual (no third-party lib): past 10MB
-(`maxLogBytes`), the file is renamed to `.1` (clobbering any older `.1`)
-before being reopened. This is a debugging aid, not an audit trail — one
-generation of backlog is enough.
+Set `WMUX_LOG_FILE` to override the path, including for isolated test
+daemons. It applies to CLI log inspection as well as daemon logging.
+
+Rotation is size-based (no third-party library). Startup rotates a file
+already past 10 MiB. During writes, a synchronized writer rotates before
+the next complete record would exceed 10 MiB, retaining one `.1` backup.
+An individual oversized record stays intact and rotates before the next
+record. This bounds growth during long daemon runs as well as across
+restarts. Newly created log files use mode 0600 on Unix.
 
 ## Level resolution
 

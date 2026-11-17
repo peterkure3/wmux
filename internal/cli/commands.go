@@ -123,10 +123,11 @@ type sessionGroup struct {
 // daemonGroup is `wmux daemon {log,debug,update,autostart}` — wmuxd
 // itself, not any one session.
 type daemonGroup struct {
-	Log       logCmd       `cmd:"" help:"inspect wmuxd's structured log"`
-	Debug     debugCmd     `cmd:"" help:"inspect wmuxd's own runtime state"`
-	Update    updateCmd    `cmd:"" help:"self-update wmux + wmuxd"`
-	Autostart autostartCmd `cmd:"" help:"register/remove wmuxd as a Task Scheduler logon task"`
+	Start     daemonStartCmd `cmd:"" help:"start wmuxd quietly in the background on demand"`
+	Log       logCmd         `cmd:"" help:"inspect wmuxd's structured log"`
+	Debug     debugCmd       `cmd:"" help:"inspect wmuxd's own runtime state"`
+	Update    updateCmd      `cmd:"" help:"self-update wmux + wmuxd"`
+	Autostart autostartCmd   `cmd:"" help:"register/remove wmuxd as a Task Scheduler logon task"`
 }
 
 // cli is the full command tree. Every namespaced leaf above is also kept

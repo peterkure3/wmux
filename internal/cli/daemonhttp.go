@@ -29,7 +29,7 @@ import (
 // it was talking to.
 var daemonToken = func() string {
 	tok, err := authtoken.Load()
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "wmux: warning: could not read %s: %v\n", authtoken.Path(), err)
 	}
 	return tok

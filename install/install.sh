@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs wmux on Linux: downloads a published GitHub release, places
-# wmux/wmuxd under ~/.local/bin (or --dir), and (by default) registers
-# wmuxd to start at logon via a systemd --user unit.
+# wmux/wmuxd under ~/.local/bin (or --dir). Daemon startup is on demand;
+# --autostart explicitly opts into a systemd --user logon unit.
 #
 # No root needed — everything is per-user: the install directory, the
 # PATH it lands on (usually already there: ~/.local/bin is on the XDG
@@ -28,19 +28,20 @@ WMUXD_UNIT="wmux-wmuxd.service"
 
 VERSION="latest"
 DIR="${HOME}/.local/bin"
-AUTOSTART=1
+AUTOSTART=0
 
 usage() {
     cat <<EOF
 Usage: install.sh [options]
 
 Installs wmux from a GitHub release into DIR (default: ~/.local/bin) and
-registers wmuxd to start at logon.
+starts its daemon only when you run wmux (no logon service by default).
 
 Options:
   --version TAG   release tag to install (default: latest)
   --dir DIR       install directory (default: ~/.local/bin)
-  --no-autostart  don't register wmuxd autostart (run
+  --autostart     explicitly opt into a logon service
+  --no-autostart  retain terminal-only startup (default; run
                   'wmux autostart install' yourself later)
   -h, --help      show this help
 
@@ -61,6 +62,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || { usage >&2; exit 1; }
             DIR="$2"
             shift 2
+            ;;
+        --autostart)
+            AUTOSTART=1
+            shift
             ;;
         --no-autostart)
             AUTOSTART=0
@@ -179,7 +184,7 @@ if [ "$AUTOSTART" -eq 1 ]; then
         echo "  run '$DIR/wmux autostart install' later, or start wmuxd manually: $DIR/wmuxd"
     fi
 else
-    echo "Skipped autostart (--no-autostart) -- run '$DIR/wmux autostart install' later to enable it."
+    echo "Terminal-only startup enabled -- run '$DIR/wmux autostart install' later to enable it."
 fi
 
 echo ""

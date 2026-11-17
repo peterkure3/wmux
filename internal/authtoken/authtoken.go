@@ -74,30 +74,46 @@ func Load() (string, error) {
 func LoadOrCreate() (string, error) {
 	path := Path()
 
-	if tok, err := Load(); err != nil {
-		return "", err
-	} else if len(tok) >= 32 {
-		return tok, nil
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("could not create token directory: %w", err)
 	}
-	// Falls through when the file is missing, empty, or truncated — a
-	// short token is treated as corrupt and replaced rather than used.
-
+	unlock, err := lockToken(path + ".lock")
+	if err != nil {
+		return "", fmt.Errorf("could not lock token: %w", err)
+	}
+	defer unlock()
+	// Serialize reads too: on Windows a concurrent rename/read can produce
+	// a sharing violation even though the replacement file is complete.
+	if existing, err := Load(); err != nil {
+		return "", err
+	} else if len(existing) >= 32 {
+		return existing, nil
+	}
+	// Missing, empty, and truncated tokens are replaced while holding the
+	// same lock, so every provisioning process receives the winning token.
 	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("could not generate auth token: %w", err)
 	}
 	tok := hex.EncodeToString(buf[:])
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("could not create token directory: %w", err)
-	}
 	// Write-then-rename so a concurrent reader never sees a half-written
 	// token, matching how state.json is persisted.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(tok+"\n"), 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".token-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("could not create token: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.WriteString(tok + "\n")
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return "", fmt.Errorf("could not write token: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return "", fmt.Errorf("could not finalize token: %w", err)
 	}
 	return tok, nil

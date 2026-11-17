@@ -28,6 +28,9 @@ const maxLogBytes = 10 * 1024 * 1024
 // name spawn_windows.go's startDaemonDetached has always redirected
 // wmuxd's stdout/stderr to, so both paths converge on one file.
 func LogPath() string {
+	if path := os.Getenv("WMUX_LOG_FILE"); path != "" {
+		return path
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "wmuxd.log" // last resort: cwd
@@ -118,7 +121,7 @@ func Init(component string) (close func(), err error) {
 	}
 	rotate(path)
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openRotating(path, maxLogBytes)
 	if err != nil {
 		return nil, err
 	}

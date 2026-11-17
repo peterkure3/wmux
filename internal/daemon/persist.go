@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -96,9 +98,30 @@ func (d *Daemon) save() {
 		slog.Error("could not create state temp file", "err", err)
 		return
 	}
+	if err := finalizeSnapshot(d.statePath, b, tmp); err != nil {
+		slog.Error("could not persist session state", "err", err)
+	}
+}
+
+type snapshotFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+// finalizeSnapshot never replaces the previous snapshot unless every write,
+// permission, flush, and close operation succeeds.
+func finalizeSnapshot(path string, b []byte, tmp snapshotFile) error {
 	tmpName := tmp.Name()
-	if err := tmp.Chmod(0o600); err == nil {
-		_, err = tmp.Write(b)
+	err := tmp.Chmod(0o600)
+	if err == nil {
+		var n int
+		n, err = tmp.Write(b)
+		if err == nil && n != len(b) {
+			err = io.ErrShortWrite
+		}
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -108,17 +131,13 @@ func (d *Daemon) save() {
 	}
 	if err != nil {
 		os.Remove(tmpName)
-		slog.Error("could not write session state", "err", err)
-		return
+		return fmt.Errorf("write session state: %w", err)
 	}
-	if err := os.Rename(tmpName, d.statePath); err != nil {
-		slog.Error("could not finalize session state", "err", err)
+	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName) // don't leave the orphan behind for the next run to trip over
-		return
+		return fmt.Errorf("finalize session state: %w", err)
 	}
-	if err := os.Chmod(d.statePath, 0o600); err != nil {
-		slog.Error("could not secure session state", "err", err)
-	}
+	return nil // the renamed file already has mode 0600
 }
 
 // load restores sessions from a previous run's snapshot, if one exists.

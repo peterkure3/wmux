@@ -186,7 +186,7 @@ func TestSpawnSurfaceCellsAttachEndToEnd(t *testing.T) {
 	// point *before* the delay ends, well clear of the exit itself.
 	command := "echo hi && sleep 1"
 	if runtime.GOOS == "windows" {
-		command = "echo hi && ping -n 2 127.0.0.1 >nul"
+		command = "echo hi && powershell.exe -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 1"
 	}
 
 	d := New("", "")
@@ -228,7 +228,7 @@ func TestSpawnSurfaceCellsAttachEndToEnd(t *testing.T) {
 		return false
 	}
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(15 * time.Second)
 	sawHi := containsHi(first)
 loop:
 	for {
