@@ -1,0 +1,16 @@
+{
+  "attach_snapshot_mean_us": 3645.9124,
+  "four_pane_layout_us": 5.74260612,
+  "input_to_cell_max_ms": 10.388444,
+  "input_to_cell_median_ms": 8.711798,
+  "ipc_ping_mean_us": 1178.78326,
+  "parse_mib_per_second": 9.68572588123642,
+  "platform": "linux-x86_64",
+  "profile": "release",
+  "pty_echo_max_ms": 3.8869019999999996,
+  "pty_echo_median_ms": 3.036627,
+  "ratatui_headless_render_us": 1984.71459,
+  "resize_mean_us": 1076.00705,
+  "screen_snapshot_us": 1610.272017,
+  "workspace_spawn_ms": 176.08834000000002
+}

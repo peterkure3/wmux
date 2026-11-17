@@ -1,0 +1,9 @@
+[package]
+name = "wmux-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[dependencies]
+vt100.workspace = true
+serde.workspace = true

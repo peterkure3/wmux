@@ -1,0 +1,26 @@
+# Omit shell to use PowerShell on Windows or $SHELL / Bash on Linux.
+default_workspace = "workspace"
+default_layout = "single" # single, columns, rows, grid, main-stack
+sidebar = true
+scrollback = 2000
+max_panes = 16
+terminal_memory_mb = 128
+notifications = true
+log_level = "warn"
+prefix = "b"
+
+[theme]
+background = [8, 13, 22]
+foreground = [239, 244, 252]
+purple = [186, 97, 255]
+cyan = [48, 217, 231]
+
+# Override only the bindings you need. Command mode follows the Ctrl+prefix key.
+[keybindings]
+preview = "f"
+split_horizontal = "s"
+split_vertical = "v"
+
+# Optional command-based agents. Never put credentials in command arguments.
+# [agents]
+# reviewer = ["my-reviewer", "--interactive"]

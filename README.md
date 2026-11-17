@@ -1,3 +1,42 @@
+Daemon startup is now terminal-only by default: run `wmux`; its daemon starts quietly in the background and reports readiness in that terminal. See [startup policy](docs/startup-policy.md).
+
+# WMUX — Rust implementation
+
+The Rust workspace in `crates/` implements a native Ratatui multiplexer with
+daemon-owned ConPTY/Unix PTYs, terminal cell parsing, shared zero-gap borders,
+persistent workspace/task metadata, local IPC, agent launch adapters, a custom
+approval broker, and Git/worktree tools.
+
+This is a usable migration milestone, **not a production-complete release**.
+See [remaining requirements](docs/rust/limitations.md) and the
+[verification report](docs/rust/verification.md) for precise platform results.
+
+```sh
+cargo build --workspace --release --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+# Keep target/release/wmux and wmuxd together (.exe on Windows).
+target/release/wmux doctor
+target/release/wmux
+```
+
+Ctrl+B enters command mode: V/S split, Tab focuses, Z zooms, B toggles the
+full-height sidebar, P opens the palette, and D detaches without killing shells.
+Rust state defaults to `~/.wmux-rust`; `WMUX_HOME` or `--home` isolates instances.
+
+- [Installation](docs/rust/installation.md), [architecture](docs/rust/architecture.md)
+- [Configuration](docs/rust/configuration.md), [keyboard](docs/rust/keyboard.md), [CLI](docs/rust/cli.md)
+- [Agents and approvals](docs/rust/agents.md), [troubleshooting](docs/rust/troubleshooting.md)
+- [Development](docs/rust/development.md), [release procedure](docs/rust/release.md), [audit](docs/audit.md)
+
+The existing Go implementation, HTTP API, hook installers and release workflow
+remain available. The material below documents that implementation and its
+earlier platform verification; it does not describe the Rust IPC protocol.
+The new Rust CI builds native Windows, Linux x86_64 and Linux ARM64 artifacts.
+It does not publish a release.
+
+---
+
 # wmux
 
 A cmux-equivalent notification/session daemon for AI agent workflows.
@@ -112,7 +151,8 @@ If systemd `--user` isn't available (e.g. WSL without systemd enabled),
 the install still succeeds; autostart just gets skipped with a warning —
 run `wmux autostart install` later, or start `wmuxd` manually.
 
-Manual (no-script) install path — build from source (Go 1.25+) or grab a
+Manual (no-script) install path — build from source (Go 1.26.10+, with
+Go 1.27.3 selected by `go.mod`) or grab a
 published release archive:
 
 ```bash

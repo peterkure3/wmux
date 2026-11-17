@@ -1,8 +1,13 @@
 /bin/
 /build/
+/coverage.out
 
 # `wmux update` swaps freshly built binaries in next to the running one.
 /wmux.exe
 /wmuxd.exe
 /wmux.exe.old.*
 /wmuxd.exe.old.*
+
+# Rust build output and local code intelligence cache
+/target/
+/.fallow/

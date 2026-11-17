@@ -1,0 +1,53 @@
+name: Rust native verification
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - run: cargo +1.99.0 fmt --all -- --check
+      - run: cargo +1.99.0 clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +1.99.0 test --workspace --locked
+      - run: cargo +1.99.0 build --workspace --release --locked
+      - name: Smoke test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/install-rust.ps1 -BinDir target/release -InstallDir "$env:RUNNER_TEMP/wmux-smoke" -ConfigDir "$env:RUNNER_TEMP/wmux-config"
+          & "$env:RUNNER_TEMP/wmux-smoke/wmux.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test Linux installer
+        if: runner.os == 'Linux'
+        run: |
+          sh -n scripts/install-rust.sh
+          sh scripts/install-rust.sh --bin-dir target/release --dir "$RUNNER_TEMP/wmux-smoke"
+          "$RUNNER_TEMP/wmux-smoke/wmux" --version
+      - name: Package binaries and checksums
+        run: python scripts/package-rust.py --platform ${{ matrix.platform }} --bin-dir target/release --output build/rust-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wmux-rust-${{ matrix.platform }}
+          path: build/rust-artifacts/*
+          if-no-files-found: error
+# Artifacts are reviewable build outputs, not an automatic public release.
+# See docs/rust/release.md for the release gate.

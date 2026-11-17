@@ -1,0 +1,18 @@
+[package]
+name = "wmux-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+wmux-core.workspace = true
+wmux-ipc.workspace = true
+wmux-terminal.workspace = true
+wmux-git.workspace = true
+wmux-security.workspace = true
+futures-util = "0.3"
+base64 = "0.22"
