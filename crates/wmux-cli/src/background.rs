@@ -85,6 +85,7 @@ pub fn spawn(executable: &Path, home: &Path) -> Result<Child> {
     let mut command = vec![b'"' as u16];
     command.extend(executable.as_os_str().encode_wide());
     command.extend([b'"' as u16, 0]);
+    let original_command = command.clone();
     let mut entries = std::env::vars_os()
         .filter(|(key, _)| !key.to_string_lossy().eq_ignore_ascii_case("WMUX_HOME"))
         .collect::<Vec<_>>();
@@ -109,18 +110,41 @@ pub fn spawn(executable: &Path, home: &Path) -> Result<Child> {
         startup.dwFlags = STARTF_USESHOWWINDOW;
         startup.wShowWindow = 0; // SW_HIDE
         let mut process: PROCESS_INFORMATION = std::mem::zeroed();
-        let ok = CreateProcessW(
+        let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
+        let mut ok = CreateProcessW(
             application.as_ptr(),
             command.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
             0,
-            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+            flags | CREATE_BREAKAWAY_FROM_JOB,
             environment.as_ptr().cast(),
             std::ptr::null(),
             &startup,
             &mut process,
         );
+        if ok == 0 && std::io::Error::last_os_error().raw_os_error() == Some(5) {
+            // Some managed hosts forbid job breakaway. Respect that policy;
+            // retain their job and report the actual persistence limitation.
+            command.clone_from(&original_command);
+            ok = CreateProcessW(
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                flags,
+                environment.as_ptr().cast(),
+                std::ptr::null(),
+                &startup,
+                &mut process,
+            );
+            if ok != 0 {
+                eprintln!(
+                    "wmux: host job forbids breakaway; closing that host may stop this daemon"
+                );
+            }
+        }
         if ok == 0 {
             return Err(std::io::Error::last_os_error().into());
         }

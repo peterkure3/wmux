@@ -26,3 +26,5 @@ terminal size. Shared independent input sizes are not implemented.
 Metadata persists across daemon restart. Running processes, terminal screens
 and agent conversations are not restored. No automatic merge or dirty worktree
 deletion exists. Go sessions remain separate behind wmux legacy.
+
+Windows hosts that forbid process-job breakaway retain control of their child daemon; WMUX reports this detected policy limitation. Ordinary process detachment cannot override that OS restriction. A breakaway-capable terminal host is required for persistence after that host's job closes.

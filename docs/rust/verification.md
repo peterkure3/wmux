@@ -33,7 +33,7 @@ capture completed successfully. No failed image is presented as verification.
 
 | Check | Windows x86_64 | Linux x86_64 |
 | --- | --- | --- |
-| Rust unit/integration suite (24 tests) | Passed, real PowerShell/ConPTY | Passed, real Bash/Unix PTY |
+| Rust unit/integration suite | 25 passed, real PowerShell/ConPTY | 24 passed, real Bash/Unix PTY |
 | Clippy, all targets, warnings denied | Passed | Passed |
 | Release executables | Built with Rust 1.99.0 MSVC | Built with Rust 1.99.1 in Debian container |
 | PTY doctor (spawn/output/resize/termination) | Passed | Passed in corrected capture |
@@ -134,3 +134,5 @@ The frozen-source Linux run passed all 24 tests, Clippy, release build and local
 ## GitHub checks, 2026-11-18
 
 The first pushed revision passed native Rust Linux x86_64 and ARM64 test/build/installer jobs. Windows exposed a flaky exit-status fixture: it sent exit keystrokes before interactive PowerShell startup finished. That fixture now launches a deterministic noninteractive child, still requiring Failed and exact exit code 7. The Go vulnerability scan identified GO-2026-6859 in Go 1.27.3; the preferred compiler/CI is upgraded to 1.27.4 and the minimum to 1.26.11. Final rerun results follow below.
+
+The Windows terminal-host Job Object regression also passes locally: the daemon remains reachable after closing a kill-on-close host job that permits breakaway. Startup requests breakaway and respects restrictive host policy, reporting when such a host can still terminate its daemon. Windows now has 25 tests; Linux has 24. The native Rust workflow for commit 009aba0 passed Windows x86_64, Linux x86_64 and Linux ARM64. The remaining Go CI failure was PowerShell splitting an unquoted coverage filename; the coverage arguments are now quoted.
