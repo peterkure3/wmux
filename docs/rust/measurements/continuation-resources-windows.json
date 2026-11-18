@@ -1,0 +1,9 @@
+﻿{
+    "platform":  "windows-x86_64",
+    "scenario":  "one PowerShell pane, no UI subscriber, 20000 output lines",
+    "idle_daemon_cpu_one_core_percent":  0,
+    "idle_daemon_rss_bytes":  10747904,
+    "output_daemon_cpu_one_core_percent":  44.8744462280372,
+    "output_daemon_rss_bytes":  11546624,
+    "sample_seconds":  2.0600801
+}

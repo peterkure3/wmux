@@ -1,0 +1,9 @@
+{
+  "platform": "linux-x86_64",
+  "scenario": "one Bash pane, no UI subscriber, 200000 output lines",
+  "idle_daemon_cpu_one_core_percent": 0.0,
+  "idle_daemon_rss_bytes": 6742016,
+  "output_daemon_cpu_one_core_percent": 30.76102045378491,
+  "output_daemon_rss_bytes": 7880704,
+  "sample_seconds": 2.0480464910015144
+}

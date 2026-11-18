@@ -21,7 +21,12 @@ New-Item -ItemType Directory -Force $env:WMUX_HOME | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $env:WMUX_HOME 'config.toml'), 'shell = ["powershell.exe", "-NoLogo", "-NoProfile"]')
 $wmux = Join-Path $root 'target/release/wmux.exe'
 try {
-    & $wmux daemon start
+    # Windows PowerShell 5 wraps redirected native stderr (including the normal
+    # startup notice) in NativeCommandError records. Judge native success by its
+    # exit code; keep terminating errors for the rest of the verification script.
+    $savedPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $wmux daemon start } finally { $ErrorActionPreference = $savedPreference }
     Check-Exit
     & $wmux doctor | Out-File -Encoding utf8 build/verification/doctor-windows.txt
     Check-Exit
