@@ -8,9 +8,9 @@ code that the application does not appear to call. Thirty Windows token
 stress runs (eight simultaneous processes each) passed after serializing
 provisioning reads and writes. Full-screen visual QA remains manual.
 
-Use Go 1.27.3, selected by `go.mod` and CI. The minimum supported Go
-release is 1.26.10. To explicitly select the preferred compiler when a
-different newer toolchain is installed, set `GOTOOLCHAIN=go1.27.3` for
+Use Go 1.27.4, selected by `go.mod` and CI. The minimum supported Go
+release is 1.26.11. To explicitly select the preferred compiler when a
+different newer toolchain is installed, set `GOTOOLCHAIN=go1.27.4` for
 the command.
 
 Run from the repository root:

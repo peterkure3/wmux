@@ -64,8 +64,7 @@ allows slower Windows process startup while still requiring all eight helpers
 to agree. Private Rust output is excluded from Go discovery with ignored
 build/go.mod and target/go.mod sentinels. Go Linux race tests remain CI work.
 
-Fallow post-change audit reported pass, but its coverage here is JavaScript only;
-it supplies no Rust/Go architectural proof.
+Fallow only analyzes the JavaScript integration here: it reports no entry point, an unused-file finding and two complexity findings. It supplies no Rust/Go architectural proof; no source was deleted based on those findings.
 
 ## Measurements
 
@@ -131,3 +130,7 @@ Windows release binaries passed a local installer smoke test with the preserved 
 The fresh Linux xterm capture, keyboard detach check and measured run passed after continuation changes. A final frozen-source Linux test/build/installer check and GitHub native workflow results are recorded below after completion.
 
 The frozen-source Linux run passed all 24 tests, Clippy, release build and local installer smoke checks. Windows passed the same 24 tests and Clippy plus real compatibility installation checks. Both checksummed archives include local native installers. Updated measurement JSON files have the continuation- prefix: shell input median Windows 76.43 ms / Linux 6.59 ms, native PTY echo 15.58 ms / 3.10 ms, idle CPU 0% in both short samples. These samples do not establish performance acceptance targets.
+
+## GitHub checks, 2026-11-18
+
+The first pushed revision passed native Rust Linux x86_64 and ARM64 test/build/installer jobs. Windows exposed a flaky exit-status fixture: it sent exit keystrokes before interactive PowerShell startup finished. That fixture now launches a deterministic noninteractive child, still requiring Failed and exact exit code 7. The Go vulnerability scan identified GO-2026-6859 in Go 1.27.3; the preferred compiler/CI is upgraded to 1.27.4 and the minimum to 1.26.11. Final rerun results follow below.

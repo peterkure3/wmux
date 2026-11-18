@@ -1,10 +1,10 @@
 module github.com/peterkure3/wmux
 
-go 1.26.10
+go 1.26.11
 
 // Keep the minimum and preferred toolchains on security-patched releases.
 // The toolchain directive is a preference, not an exact compiler pin.
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0

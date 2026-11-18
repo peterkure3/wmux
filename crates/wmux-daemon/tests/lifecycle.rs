@@ -376,22 +376,49 @@ async fn protocol_rejects_unknown_versions_and_duplicate_daemon() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn process_crash_and_daemon_crash_are_reported_truthfully() {
     let mut d = Daemon::start().await;
-    let (w, p) = d.new_workspace("crash").await;
-    d.call(Request::Input {
-        pane: p.clone(),
-        data: b"exit 7\r".to_vec(),
-    })
-    .await;
-    for _ in 0..200 {
-        if d.snapshot().await.state.workspaces[&w].panes[&p].state == ProcessState::Failed {
-            break;
+    // Test OS exit collection with a deterministic noninteractive child.
+    // Sending keystrokes while PowerShell/PSReadLine is still negotiating its
+    // terminal can lose those keys; interactive I/O has separate coverage.
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "exit 7",
+        ]
+    } else {
+        vec!["/bin/sh", "-c", "exit 7"]
+    };
+    let Reply::Created(w) = d
+        .call(Request::New {
+            name: "crash".into(),
+            cwd: std::env::current_dir().unwrap().to_string_lossy().into(),
+            command: command.into_iter().map(String::from).collect(),
+        })
+        .await
+    else {
+        panic!()
+    };
+    let p = d.snapshot().await.state.workspaces[&w]
+        .focused
+        .clone()
+        .unwrap();
+    let failed = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let s = d.snapshot().await;
+            let pane = &s.state.workspaces[&w].panes[&p];
+            if pane.state != ProcessState::Running {
+                break pane.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(
-        d.snapshot().await.state.workspaces[&w].panes[&p].exit_code,
-        Some(7)
-    );
+    })
+    .await
+    .expect("noninteractive child exit was not collected");
+    assert_eq!(failed.state, ProcessState::Failed);
+    assert_eq!(failed.exit_code, Some(7));
     let (_, running) = d.new_workspace("surviving-metadata").await;
     d.child.kill().unwrap();
     d.child.wait().unwrap();

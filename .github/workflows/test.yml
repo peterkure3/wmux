@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
 
       # The Linux installer scripts are POSIX sh (they run under dash on
       # Ubuntu, busybox ash on WSL). bash -n catches syntax errors; dash
@@ -58,7 +58,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       - run: go mod verify
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - run: go vet ./...
