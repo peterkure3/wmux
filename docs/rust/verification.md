@@ -138,3 +138,9 @@ the relevant verification.
 Broader terminal/SSH/live-provider testing, arbitrary selection, richer terminal
 protocols, fully nonblocking Unix readers, IPC deltas, soak profiling, signed
 distribution and the other documented release gates remain incomplete.
+
+## 0.3.1 Unix I/O follow-up
+
+Unix PTY transport now uses nonblocking, close-on-exec descriptors registered with Tokio readiness. The real Linux PTY regression exercises sixteen panes on one Tokio thread, 64 KiB binary echo, full output/input queues, timer responsiveness and descriptor/task cleanup after cancellation. Windows ConPTY I/O is unchanged. The new test brings the Linux total to 25, matching Windows. Final native CI links and installed version are recorded after verification.
+
+The first broad local builds exhausted the project disk. Only generated debug caches were removed after path/reparse-point checks; release binaries, source, session files and other projects were preserved. Subsequent Linux builds use a native Docker cache and disposable verification profiles omit debug symbols/incremental data. Docker was started on demand after its engine stopped; no startup settings were changed.

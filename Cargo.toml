@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "MIT"
 rust-version = "1.99"
@@ -31,7 +31,6 @@ wmux-storage = { path = "crates/wmux-storage" }
 wmux-ipc = { path = "crates/wmux-ipc" }
 wmux-agents = { path = "crates/wmux-agents" }
 wmux-git = { path = "crates/wmux-git" }
-wmux-daemon = { path = "crates/wmux-daemon" }
 wmux-tui = { path = "crates/wmux-tui" }
 
 [profile.release]

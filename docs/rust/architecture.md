@@ -21,10 +21,13 @@ The daemon owns every PTY, parser and child. Detaching a UI drops only its
 subscription. A serialized actor runs on a blocking worker so native spawn,
 SQLite and PTY control calls do not block Tokio's executor. PTY readers feed a
 bounded 256-message output queue, with chunks no larger than 16 KiB. Each pane
-has a 64-message bounded input queue. Writes run on blocking workers only while
-there is data, rather than reserving one idle writer thread per pane. The
-portable PTY backend requires one blocking reader thread per live pane; fully
-nonblocking native Unix FD handling is a future optimization.
+has a 64-message bounded input queue. Unix reads and writes use a nonblocking,
+close-on-exec duplicate of the master registered with Tokio AsyncFd. Two
+lightweight tasks handle readiness and bounded-channel backpressure. Pane
+destruction aborts both tasks, including pending sends/writes, so descriptors
+cannot outlive the pane. Registration is prepared before child creation.
+Windows retains its native blocking ConPTY reader and uses blocking writer
+workers only while there is data.
 
 Clients receive an initial snapshot and coalesced updates, limited to about
 30 Hz per subscriber. Identical cells are run-length encoded per row. Ratatui

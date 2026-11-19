@@ -2270,7 +2270,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wmux-agents"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "fs2",
@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-git"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-ipc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-pty"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-security"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-storage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-terminal"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "vt100",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "wmux-tui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",

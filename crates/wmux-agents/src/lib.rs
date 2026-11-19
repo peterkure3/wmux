@@ -44,17 +44,17 @@ pub fn find(executable: &str) -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     let p = PathBuf::from(executable);
     let executable_file = |p: &std::path::Path| {
-        if !p.is_file() {
-            return false;
-        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            if !p.is_file() {
+                return false;
+            }
             std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
         }
         #[cfg(windows)]
         {
-            true
+            p.is_file()
         }
     };
     if p.is_absolute() || p.components().count() > 1 {

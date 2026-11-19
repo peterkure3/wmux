@@ -10,7 +10,7 @@ This implementation must not be labeled production-complete. Remaining gates:
   protocols and broader terminal capability negotiation.
 - Rich process-tree/resource monitoring. History search is bounded by retained
   physical rows; previews are repository-confined text capped at 64 KiB.
-- Fully nonblocking Unix PTY readers, dirty-row IPC deltas and broad load/soak
+- Dirty-row IPC deltas and broad load/soak
   profiling. Memory configuration bounds terminal allocations, not total RSS.
 - Complete journal/recovery semantics for irreversible process changes after a
   storage failure. SQLite tests cover failed read-only and disk-full commits.

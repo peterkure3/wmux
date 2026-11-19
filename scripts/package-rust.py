@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Package already-tested native binaries; never publishes or downloads."""
-import argparse, hashlib, pathlib, tarfile, zipfile
+import argparse, hashlib, pathlib, tarfile, tomllib, zipfile
 p=argparse.ArgumentParser()
 p.add_argument("--platform",required=True,choices=["windows-x86_64","linux-x86_64","linux-aarch64"])
 p.add_argument("--bin-dir",type=pathlib.Path,required=True)
@@ -11,7 +11,8 @@ files=[a.bin_dir/f"{name}{suffix}" for name in ("wmux","wmuxd")]
 for f in files:
     if not f.is_file():p.error(f"binary missing: {f}")
 a.output.mkdir(parents=True,exist_ok=True)
-archive=a.output/f"wmux-rust-0.3.0-{a.platform}{'.zip' if suffix else '.tar.gz'}"
+version=tomllib.loads(pathlib.Path("Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+archive=a.output/f"wmux-rust-{version}-{a.platform}{'.zip' if suffix else '.tar.gz'}"
 if suffix:
     with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED) as z:
         for f in files:z.write(f,f.name)

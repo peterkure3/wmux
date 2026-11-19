@@ -31,3 +31,5 @@ emulator's device reply pipe is drained concurrently and closed with the surface
 Fallow currently supplies JavaScript analysis only in this repository. Its
 results do not replace Rust compiler, Clippy, Cargo dependency checks, Go
 verification or manual security review.
+
+Packaging uses Python 3.11+ (stdlib tomllib) to read the workspace version. For Linux verification on Windows, use a native Docker volume for CARGO_TARGET_DIR; bind-mounted Windows debug caches can be slow and consume significant disk space. Disable incremental/debug symbols in disposable verification builds when disk space is constrained.

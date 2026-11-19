@@ -1,10 +1,13 @@
 use anyhow::{Context, Result, ensure};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
+#[cfg(windows)]
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
 use wmux_core::config::Config;
 #[cfg(windows)]
 mod job;
+#[cfg(unix)]
+mod unix;
 
 #[derive(Debug)]
 pub enum Event {
@@ -16,6 +19,8 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     input: mpsc::Sender<Vec<u8>>,
+    #[cfg(unix)]
+    _io: unix::Tasks,
     #[cfg(windows)]
     _job: job::Job,
 }
@@ -51,13 +56,19 @@ impl Pty {
         cmd.env("WMUX_PANE_ID", &id);
         cmd.env("WMUX_HOME", home);
         // Readers/writers are allocated before spawning, so setup failures cannot leak a child.
+        #[cfg(windows)]
         let mut reader = pair.master.try_clone_reader()?;
+        #[cfg(windows)]
         let writer = pair.master.take_writer()?;
-        let mut child = pair
+        #[cfg(unix)]
+        let descriptor = unix::prepare(&*pair.master, runtime)?;
+        let child = pair
             .slave
             .spawn_command(cmd)
             .with_context(|| format!("cannot launch {}", command[0]))?;
         drop(pair.slave);
+        #[cfg(windows)]
+        let mut child = child;
         #[cfg(windows)]
         let job = match job::Job::assign(&*child) {
             Ok(j) => j,
@@ -67,76 +78,87 @@ impl Pty {
                 return Err(e);
             }
         };
-        let (input, mut rx) = mpsc::channel::<Vec<u8>>(64);
-        let writer_events = events.clone();
-        let writer_id = id.clone();
-        runtime.spawn(async move {
-            let mut writer = writer;
-            while let Some(data) = rx.recv().await {
-                let result = tokio::task::spawn_blocking(move || {
-                    let r = writer.write_all(&data).and_then(|_| writer.flush());
-                    (writer, r)
-                })
-                .await;
-                match result {
-                    Ok((returned, Ok(()))) => writer = returned,
-                    Ok((_, Err(e))) => {
-                        let _ = writer_events
-                            .send(Event::Error(writer_id.clone(), format!("PTY input: {e}")))
-                            .await;
-                        break;
-                    }
-                    Err(e) => {
-                        let _ = writer_events
-                            .send(Event::Error(
-                                writer_id.clone(),
-                                format!("PTY input worker: {e}"),
-                            ))
-                            .await;
-                        break;
-                    }
-                }
-            }
-        });
-        let reader_id = id.clone();
-        let thread = std::thread::Builder::new()
-            .name(format!("pty-{id}"))
-            .spawn(move || {
-                let mut buf = [0u8; 16384];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if events
-                                .blocking_send(Event::Output(reader_id.clone(), buf[..n].to_vec()))
-                                .is_err()
-                            {
-                                return;
-                            }
+        let (input, rx) = mpsc::channel::<Vec<u8>>(64);
+        #[cfg(unix)]
+        let io = unix::start(descriptor, id, events, rx, runtime);
+        #[cfg(windows)]
+        {
+            let mut rx = rx;
+            let writer_events = events.clone();
+            let writer_id = id.clone();
+            runtime.spawn(async move {
+                let mut writer = writer;
+                while let Some(data) = rx.recv().await {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let r = writer.write_all(&data).and_then(|_| writer.flush());
+                        (writer, r)
+                    })
+                    .await;
+                    match result {
+                        Ok((returned, Ok(()))) => writer = returned,
+                        Ok((_, Err(e))) => {
+                            let _ = writer_events
+                                .send(Event::Error(writer_id.clone(), format!("PTY input: {e}")))
+                                .await;
+                            break;
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        // Unix PTY masters report EIO on slave closure.
-                        Err(e) if cfg!(unix) && e.raw_os_error() == Some(5) => break,
                         Err(e) => {
-                            let _ = events.blocking_send(Event::Error(
-                                reader_id.clone(),
-                                format!("PTY output: {e}"),
-                            ));
+                            let _ = writer_events
+                                .send(Event::Error(
+                                    writer_id.clone(),
+                                    format!("PTY input worker: {e}"),
+                                ))
+                                .await;
                             break;
                         }
                     }
                 }
-                let _ = events.blocking_send(Event::Eof(reader_id));
             });
-        if let Err(e) = thread {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(e.into());
+            let reader_id = id.clone();
+            let thread = std::thread::Builder::new()
+                .name(format!("pty-{id}"))
+                .spawn(move || {
+                    let mut buf = [0u8; 16384];
+                    loop {
+                        match reader.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                if events
+                                    .blocking_send(Event::Output(
+                                        reader_id.clone(),
+                                        buf[..n].to_vec(),
+                                    ))
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                            // Unix PTY masters report EIO on slave closure.
+                            Err(e) if cfg!(unix) && e.raw_os_error() == Some(5) => break,
+                            Err(e) => {
+                                let _ = events.blocking_send(Event::Error(
+                                    reader_id.clone(),
+                                    format!("PTY output: {e}"),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    let _ = events.blocking_send(Event::Eof(reader_id));
+                });
+            if let Err(e) = thread {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e.into());
+            }
         }
         Ok(Self {
             master: pair.master,
             child,
             input,
+            #[cfg(unix)]
+            _io: io,
             #[cfg(windows)]
             _job: job,
         })
