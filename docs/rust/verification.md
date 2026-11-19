@@ -1,20 +1,20 @@
 # Verification report - 2026-11-19
 
-The tested source is [f420d14](https://github.com/peterkure3/wmux/commit/f420d14f43d9074674ffdf4a81e85d3dd7c89e7e).
-It is installed as the default Windows WMUX 0.3.0. This is a usable migration
+The tested source is [d807c4d](https://github.com/peterkure3/wmux/commit/d807c4dc50447e0009eefae7d1e45831883fdf40).
+It is installed as the default Windows WMUX 0.3.1. This is a usable migration
 milestone, **not a production-complete release**; [remaining gates](limitations.md)
 are explicit. No public release/tag was published.
 
 ## Final platform results
 
-All jobs passed in [Rust native verification](https://github.com/peterkure3/wmux/actions/runs/44262215446)
-and [Go verification](https://github.com/peterkure3/wmux/actions/runs/44262215558).
+All jobs passed in [Rust native verification](https://github.com/peterkure3/wmux/actions/runs/44590233249)
+and [Go verification](https://github.com/peterkure3/wmux/actions/runs/44590233139).
 
 | Platform | Rust tests | Clippy / release build / installer |
 | --- | ---: | --- |
 | Windows x86_64 | 25 passed | Passed, including real ConPTY and host-job closure |
-| Linux x86_64 | 24 passed | Passed, Bash/Unix PTY; also tested locally in Debian |
-| Linux ARM64 | 24 passed | Passed natively on the GitHub ARM64 runner |
+| Linux x86_64 | 25 passed | Passed, Bash/Unix PTY; also tested locally in Debian |
+| Linux ARM64 | 25 passed | Passed natively on the GitHub ARM64 runner |
 
 Go 1.27.4 passed Windows tests, Linux race tests, vet, dependency verification
 and vulnerability scanning in CI. The final local Windows suite also passed
@@ -67,7 +67,7 @@ launch normally but their permission transports are not bridged.
 
 ## Actual application captures
 
-The following are captures of xterm running the real application at 120x40,
+The following are captures of xterm running WMUX 0.3.0 at 120x40,
 with four live Bash PTYs and zero agents. Keyboard focus, panel expansion and
 detach were exercised; a post-detach snapshot confirmed four live processes.
 
@@ -83,7 +83,7 @@ real cells, not a claim of an interactive Windows screenshot.
 
 ## Installed startup policy
 
-Plain wmux now runs Rust 0.3.0. The preserved Go pair is in legacy/ and reports
+Plain wmux now runs Rust 0.3.1. The preserved Go pair is in legacy/ and reports
 compat-f420d14; old Go commands/sessions remain accessible through wmux legacy.
 Both existing executables and configuration were preserved/backed up; existing
 sessions were not stopped and no live process state was migrated.
@@ -96,7 +96,7 @@ and reported rather than bypassed. No reboot test was performed.
 
 ## Measurements
 
-Updated raw results are the continuation-* JSON files in [measurements](measurements/).
+The 0.3.0 baseline results below are the continuation-* JSON files in [measurements](measurements/).
 These are short development-PC samples, not performance acceptance guarantees.
 
 | Measurement | Windows / PowerShell | Linux / Bash |
@@ -119,7 +119,7 @@ Child/agent memory and physical keyboard/display latency are excluded.
 ## Artifacts, fixes and limits
 
 Checksummed Windows, Linux x86_64 and Linux ARM64 archives were produced by CI,
-downloaded under build/github-artifacts/f420d14 and independently hash-verified.
+downloaded under build/github-artifacts/d807c4d and independently hash-verified.
 Local build/rust-artifacts also contains Windows/Linux x86_64 packages. Native
 local installers are included. [Installation](installation.md) documents commands.
 
@@ -136,11 +136,20 @@ no source was deleted based on them. Source inspection and native tests supplied
 the relevant verification.
 
 Broader terminal/SSH/live-provider testing, arbitrary selection, richer terminal
-protocols, fully nonblocking Unix readers, IPC deltas, soak profiling, signed
+protocols, IPC deltas, soak profiling, signed
 distribution and the other documented release gates remain incomplete.
 
 ## 0.3.1 Unix I/O follow-up
 
-Unix PTY transport now uses nonblocking, close-on-exec descriptors registered with Tokio readiness. The real Linux PTY regression exercises sixteen panes on one Tokio thread, 64 KiB binary echo, full output/input queues, timer responsiveness and descriptor/task cleanup after cancellation. Windows ConPTY I/O is unchanged. The new test brings the Linux total to 25, matching Windows. Final native CI links and installed version are recorded after verification.
+Unix PTY transport now uses nonblocking, close-on-exec descriptors registered with Tokio readiness. The real Linux PTY regression exercises sixteen panes on one Tokio thread, 64 KiB binary echo, full output/input queues, timer responsiveness and descriptor/task cleanup after cancellation. Windows ConPTY I/O is unchanged. The new test brings the Linux total to 25, matching Windows. Native CI passed on Windows x86_64, Linux x86_64 and Linux ARM64 at the source commit above. The checksummed Windows CI archive was installed as 0.3.1 and passed the isolated four-PowerShell-pane test again. The preserved Go binary still reports compat-f420d14 and the installation check found zero WMUX scheduled tasks.
 
 The first broad local builds exhausted the project disk. Only generated debug caches were removed after path/reparse-point checks; release binaries, source, session files and other projects were preserved. Subsequent Linux builds use a native Docker cache and disposable verification profiles omit debug symbols/incremental data. Docker was started on demand after its engine stopped; no startup settings were changed.
+
+The [0.3.1 Linux release sample](measurements/unix-readiness-linux-0.3.1.json)
+measured native PTY echo median 6.11 ms, input-to-cell median 16.67 ms
+(maximum 20.72 ms), IPC ping mean 2.70 ms, attach snapshot mean 8.51 ms,
+resize mean 4.26 ms and headless rendering mean 1.60 ms. Parser throughput was
+17.54 MiB/s. Host load and cache/disk conditions differ from the baseline;
+these samples do not demonstrate a latency improvement or meet a release target.
+The sixteen-pane regression verifies that Unix I/O adds no OS worker threads,
+remains responsive with full queues and releases tasks/descriptors on cancellation.

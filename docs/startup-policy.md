@@ -1,6 +1,6 @@
 # Terminal-only daemon startup
 
-The installed Windows default is the Rust WMUX 0.3.0 interface. Run wmux in your
+The installed Windows default is the Rust WMUX 0.3.1 interface. Run wmux in your
 terminal; cold startup reports "wmux: wmuxd started in background" there. The
 daemon is detached without a new command window. Subsequent invocations reuse
 it; detaching the UI leaves its sessions running.
