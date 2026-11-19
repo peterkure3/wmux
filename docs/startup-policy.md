@@ -1,9 +1,26 @@
 # Terminal-only daemon startup
 
-The default installers no longer register a logon service. Run `wmux` in a terminal to start the daemon on demand. The invoking terminal displays `wmux: wmuxd started in background` after readiness succeeds. The daemon runs detached, with output in its background log and no new command window. Subsequent invocations reuse it. Closing the UI leaves sessions running.
+The installed Windows default is the Rust WMUX 0.3.0 interface. Run wmux in your
+terminal; cold startup reports "wmux: wmuxd started in background" there. The
+daemon is detached without a new command window. Subsequent invocations reuse
+it; detaching the UI leaves its sessions running.
 
-The retained Go CLI also supports `wmux daemon start`. Notification hooks, help and version commands do not start a daemon. Explicit `wmux autostart install` and installer opt-in flags remain available for users who choose logon startup.
+The previous wmux-wmuxd logon task had DisallowStartIfOnBatteries enabled,
+matching the reported AC-power behavior. It was removed with administrator
+elevation. Final installation checks found zero WMUX scheduled tasks. No reboot
+test was performed.
 
-On this Windows installation, the installed Go launcher was updated without replacing the daemon binary or stopping existing sessions. The `wmux-wmuxd` logon task had `DisallowStartIfOnBatteries` enabled, explaining the AC-power behavior. The task was removed with administrator elevation on 2026-11-17. A subsequent Task Scheduler inventory found zero WMUX tasks. The installed launcher passed isolated cold startup, warm reuse, and authenticated access after CLI exit against its existing daemon binary. No reboot test is claimed.
+Installers do not register tasks/services or launch the daemon. Help/version,
+notification hooks and read-only diagnostics do not implicitly start it.
+Explicit terminal commands such as new/attach/daemon start can start it.
 
-Rust executables remain a separate implementation milestone; the installed Go launcher preserves existing Go agent-hook compatibility. Rust startup has independent real-process tests on Windows and Linux.
+The Go pair is preserved in legacy/ with separate original state. Use
+wmux legacy list/attach for Go sessions; existing Go notification aliases retain
+their protocol. Existing sessions were not terminated or migrated. The Go
+compatibility binaries use the security-patched Go 1.27.4 compiler.
+
+The installed Rust build passed an isolated four-PowerShell-pane test with real
+input/output, startup notice, warm reuse and daemon survival after CLI exit.
+The test daemon was stopped afterward. Windows host-job closure is separately
+tested; hosts that prohibit breakaway retain control of their daemon and WMUX
+reports that OS policy limitation.

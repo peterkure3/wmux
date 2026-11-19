@@ -1,138 +1,140 @@
-# Verification — 2026-11-17
+# Verification report - 2026-11-19
 
-This is a tested Rust implementation milestone. It is **not a production release**;
-[remaining requirements](limitations.md) are still explicit release gates.
+The tested source is [f420d14](https://github.com/peterkure3/wmux/commit/f420d14f43d9074674ffdf4a81e85d3dd7c89e7e).
+It is installed as the default Windows WMUX 0.3.0. This is a usable migration
+milestone, **not a production-complete release**; [remaining gates](limitations.md)
+are explicit. No public release/tag was published.
+
+## Final platform results
+
+All jobs passed in [Rust native verification](https://github.com/peterkure3/wmux/actions/runs/44262215446)
+and [Go verification](https://github.com/peterkure3/wmux/actions/runs/44262215558).
+
+| Platform | Rust tests | Clippy / release build / installer |
+| --- | ---: | --- |
+| Windows x86_64 | 25 passed | Passed, including real ConPTY and host-job closure |
+| Linux x86_64 | 24 passed | Passed, Bash/Unix PTY; also tested locally in Debian |
+| Linux ARM64 | 24 passed | Passed natively on the GitHub ARM64 runner |
+
+Go 1.27.4 passed Windows tests, Linux race tests, vet, dependency verification
+and vulnerability scanning in CI. The final local Windows suite also passed
+with packages serialized, followed by vet and govulncheck. The scanner reported
+zero reachable vulnerabilities; it also reported vulnerabilities in imported
+packages/modules that the application does not appear to call. This is not a
+claim that every dependency is vulnerability-free.
+
+Reproduction commands:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --workspace --release --bins --examples --locked
+go mod verify
+go vet ./...
+go test -count=1 ./...
+# Linux/cgo:
+go test -race -count=1 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+```
 
 ## Implemented and exercised
 
 Eleven Rust crates separate model/config/layout, terminal emulation, PTYs,
-security, local IPC, SQLite, agents, Git, daemon, TUI and CLI. Real ConPTY and Unix
-PTY processes feed vt100/vte screen cells into Ratatui. Workspaces support nested
-splits, grid/rows/columns/main-stack presets, focus, resize, swap, rename, zoom and
-close. UI detach leaves processes running. Metadata/tasks/notifications/custom
-approvals persist; restart never resurrects stale PIDs.
+per-user IPC/security, SQLite, agent adapters, Git, daemon, TUI and CLI.
+Real terminal cells feed Ratatui; no simulated agent output is used.
 
-The actual xterm images below show four Bash processes, **zero agents**, and
-ordinary executed shell commands. They contain no simulated agent output.
-Shared borders touch, intersections join, and the sidebar reaches the status bar.
-The second image follows real keyboard pane focus and lower-panel commands.
+Nested splits, contiguous shared borders, full-height sidebar, workspace tabs,
+focus, resize, swap, rename, zoom, close, collapsible lower panels and inspector
+are connected to real daemon-owned processes. Copy mode searches retained
+physical history rows in both directions; repository-confined file previews
+are capped at 64 KiB. Git inspection includes working/staged changes and
+untracked file names; dirty worktrees are never force-deleted.
 
-![Actual running four-pane WMUX](../screenshots/wmux-rust-linux-real.png)
+Control connections acquire exclusive write ownership for modified workspaces
+and release it on disconnect. Observers remain available. Tests cover real
+shell I/O, resize, detach/reconnect, high output, process failure, daemon crash,
+task persistence, protocol rejection, duplicate locks, missing agents, approval
+decisions/expiry, Unicode, alternate screens and terminal device replies.
+SQLite tests simulate read-only and database-full transaction failures.
+UI geometry tests include 80x24, 120x40, 200x60 and small-terminal fallback.
 
-![Actual keyboard-expanded lower panel](../screenshots/wmux-rust-linux-panels.png)
+Claude/Codex command-hook contracts are opt-in and tested through real WMUX CLI
+and daemon processes: explicit approval/rejection is returned as provider JSON;
+missing panes deny permission. Live paid-provider/version validation remains
+open. Stop means an agent turn ended, not task/process completion. Gemini/Aider
+launch normally but their permission transports are not bridged.
 
-Capture: scripts/capture-linux.sh in a Debian Linux container, Xvfb and UTF-8
-xterm at 120x40. A parsed post-detach snapshot verified four Running Bash panes
-with live PIDs. The original capture attempt exposed a missing UTF-8 locale and
-headless keyboard focus; those environment issues were corrected and the images
-were recaptured and inspected. An earlier orchestration run was interrupted by
-editing its capture script while it was waiting; the independent corrected
-capture completed successfully. No failed image is presented as verification.
+## Actual application captures
 
-## Platforms and commands
+The following are captures of xterm running the real application at 120x40,
+with four live Bash PTYs and zero agents. Keyboard focus, panel expansion and
+detach were exercised; a post-detach snapshot confirmed four live processes.
 
-| Check | Windows x86_64 | Linux x86_64 |
-| --- | --- | --- |
-| Rust unit/integration suite | 25 passed, real PowerShell/ConPTY | 24 passed, real Bash/Unix PTY |
-| Clippy, all targets, warnings denied | Passed | Passed |
-| Release executables | Built with Rust 1.99.0 MSVC | Built with Rust 1.99.1 in Debian container |
-| PTY doctor (spawn/output/resize/termination) | Passed | Passed in corrected capture |
-| Real full-screen UI capture | Not captured | xterm screenshots above |
-| ARM64 execution / remote SSH host matrix | Not tested | Not tested |
+![Real four-pane Rust WMUX](../screenshots/wmux-rust-linux-real.png)
 
-Commands: cargo fmt --all -- --check; cargo clippy --workspace --all-targets
---locked -- -D warnings; cargo test --workspace --locked; cargo build --workspace
---release --bins --examples --locked. Linux executed ELF binaries on the Linux
-kernel, not just cross-compilation.
+![Real expanded diagnostics panel](../screenshots/wmux-rust-linux-panels.png)
 
-Lifecycle coverage includes creation, shell I/O, four panes, resizing, UI
-disconnect/reconnect, task persistence, missing-agent rejection, process failure,
-daemon crash, unknown protocol versions, duplicate-daemon locks, explicit custom
-approval decisions/expiry, and responsive independent panes during high output.
-A Windows named-pipe instance gap found during reconnect testing was fixed;
-a 320-request reconnect stress test now passes. Shutdown acknowledgement is
-flushed before service teardown. Terminal tests cover Unicode/combining/wide
-characters, alternate screens, SGR, bounded scrollback, notification callbacks
-and device replies. UI tests cover 80x24, 120x40, 200x60, focus invariance and
-small-terminal fallback.
+The installed Windows build was separately verified with four real PowerShell
+PTYs, cold startup notice, warm daemon reuse, survival after CLI exit and a
+command whose computed output reached the rendered screen cells. The isolated
+test daemon was stopped afterward. Its text capture is a headless rendering of
+real cells, not a claim of an interactive Windows screenshot.
 
-The retained Go implementation passed go mod verify, go vet ./..., go build ./...
-and go test -count=1 ./... on Windows with the existing Go 1.27.3 toolchain.
-The Windows PTY fixture now uses a local sleep rather than ping; terminal
-device replies are drained concurrently. The token provisioning test's timeout
-allows slower Windows process startup while still requiring all eight helpers
-to agree. Private Rust output is excluded from Go discovery with ignored
-build/go.mod and target/go.mod sentinels. Go Linux race tests remain CI work.
+## Installed startup policy
 
-Fallow only analyzes the JavaScript integration here: it reports no entry point, an unused-file finding and two complexity findings. It supplies no Rust/Go architectural proof; no source was deleted based on those findings.
+Plain wmux now runs Rust 0.3.0. The preserved Go pair is in legacy/ and reports
+compat-f420d14; old Go commands/sessions remain accessible through wmux legacy.
+Both existing executables and configuration were preserved/backed up; existing
+sessions were not stopped and no live process state was migrated.
+
+The AC-dependent wmux-wmuxd logon task was removed. Cold startup prints its
+notice in the invoking terminal, and background launch does not create a command
+window. Native Windows testing confirms survival when a terminal host closes a
+kill-on-close job that permits breakaway. Restrictive host policy is respected
+and reported rather than bypassed. No reboot test was performed.
 
 ## Measurements
 
-Raw, reproducible results are in [measurements](measurements/). These are short
-release-build samples on a development PC, sometimes with other verification
-workloads active. No performance acceptance threshold is claimed. Input timing
-includes IPC/polling and the actual program response; it excludes keyboard
-hardware, compositor and physical display latency.
+Updated raw results are the continuation-* JSON files in [measurements](measurements/).
+These are short development-PC samples, not performance acceptance guarantees.
 
 | Measurement | Windows / PowerShell | Linux / Bash |
 | --- | ---: | ---: |
-| Single-line native PTY echo median | 15.74 ms | 3.04 ms |
-| Shell-command input to parsed cells median | 357.88 ms | 8.71 ms |
-| Shell-command maximum, 10 samples | 2586.32 ms | 10.39 ms |
-| IPC ping mean | 3.23 ms | 1.18 ms |
-| Attach initial snapshot mean | 7.26 ms | 3.65 ms |
-| Resize acknowledgement mean | 1.40 ms | 1.08 ms |
-| Workspace process spawn | 965.36 ms | 176.09 ms |
-| Headless Ratatui render mean | 3.60 ms | 1.98 ms |
-| Parser throughput | 9.09 MiB/s | 9.69 MiB/s |
+| Native PTY echo median | 15.58 ms | 3.10 ms |
+| Shell input to parsed cells median | 76.43 ms | 6.59 ms |
+| Shell input maximum, ten samples | 158.42 ms | 7.46 ms |
+| IPC ping mean | 0.70 ms | 0.92 ms |
+| Attach snapshot mean | 2.39 ms | 1.87 ms |
+| Resize acknowledgement mean | 0.56 ms | 0.62 ms |
+| Headless Ratatui render mean | 1.41 ms | 0.83 ms |
+| Parser throughput | 30.09 MiB/s | 22.56 MiB/s |
 
-The native echo fixture is an actual Rust process reading PTY input and writing
-a marker. It helps distinguish transport cost from interactive-shell behavior.
-The gap suggests shell/input processing and load contribute, but does not prove
-their exact shares. Earlier Windows shell medians varied from 49 to 461 ms.
-Windows command latency and cold startup therefore remain profiling work.
+Idle daemon CPU measured 0% in both short samples. Windows RSS was 10,747,904
+bytes; Linux RSS was 6,742,016 bytes. Under output load, one-core CPU percentages
+were 44.87% and 30.76%; workloads differ (20,000 longer Windows lines versus
+200,000 shorter Linux lines), so these are not throughput comparisons.
+Child/agent memory and physical keyboard/display latency are excluded.
 
-Resource samples used one real shell and no UI subscriber:
+## Artifacts, fixes and limits
 
-| Resource | Windows | Linux |
-| --- | ---: | ---: |
-| Idle daemon RSS | 10.34 MiB | 6.32 MiB |
-| Output daemon RSS | 11.10 MiB | 7.42 MiB |
-| Idle CPU, one-core percentage | 0.00% | 1.00% |
-| Output CPU, one-core percentage | 22.29% | 33.67% |
+Checksummed Windows, Linux x86_64 and Linux ARM64 archives were produced by CI,
+downloaded under build/github-artifacts/f420d14 and independently hash-verified.
+Local build/rust-artifacts also contains Windows/Linux x86_64 packages. Native
+local installers are included. [Installation](installation.md) documents commands.
 
-Windows emitted 20000 longer lines; Linux emitted 200000 shorter lines. Samples
-span about 2.1 seconds and are not equivalent throughput comparisons. Agent and
-shell child memory is excluded. No soak-test or hard RSS guarantee is asserted.
+CI exposed and resolved: an interactive PowerShell exit-test startup race;
+Go's GO-2026-6859 toolchain vulnerability (upgrade to 1.27.4, minimum 1.26.11);
+and PowerShell splitting an unquoted coverage filename. Local load-related
+temporary-directory/PTY timing failures were recorded before the serialized
+Go suite passed. Earlier screenshot locale/focus orchestration failures were
+corrected and actual xterm images recaptured.
 
-## Artifacts and release gate
+Fallow only analyzes one JavaScript integration file here. Its absent entry
+point, unused-file and complexity findings are not Rust/Go architectural proof;
+no source was deleted based on them. Source inspection and native tests supplied
+the relevant verification.
 
-Tested native binaries are under target/release (Windows) and
-build/linux-target/release (Linux). Checksummed archives are prepared under
-build/rust-artifacts. scripts/package-rust.py reproduces the archives.
-
-Rust CI was added for Windows x86_64, Linux x86_64 and Linux ARM64. The workflow
-has not been executed remotely in this session; ARM64 and the broader terminal
-matrix are not passing claims. No Rust release was published. Built-in provider
-approval bridges, richer terminal/search/diff behavior, signing/installation and
-other limitations remain in limitations.md.
-
-## Terminal-only daemon startup
-
-The final Windows and Linux Rust suites include a real CLI cold/warm startup test: the startup notice returns to the invoking terminal, the daemon survives CLI exit, and a second invocation reuses it. Windows native detached creation explicitly disables inherited handles; the daemon opens its own private log. The retained Go CLI also passed the complete final `go test -count=1 ./...` suite on Windows, including real binary startup integration tests. The installed launcher was separately checked against the existing installed daemon: cold startup, same-process reuse and authenticated access after CLI exit passed; Task Scheduler inventory found zero WMUX tasks after removal. No reboot was performed. See [startup policy](../startup-policy.md) for the installed launcher and logon-task change.
-
-## Continuation: migration and reliability
-
-The Windows suite now passes 24 tests, including persistent control ownership, bidirectional physical-history search, official Claude/Codex hook approval/rejection JSON contracts, missing-pane denial, bounded Git output, staged changes, repository-confined previews, and read-only/disk-full SQLite rollback. Full live paid-provider sessions are not claimed. Rust IPC is version 2; use matching clients and daemon.
-
-Windows release binaries passed a local installer smoke test with the preserved Go pair: Rust --version, wmux legacy version, and legacy notify help. The approved installation changes plain wmux to Rust while old Go sessions remain behind wmux legacy. Local hooks/config are not overwritten. Native local installers and CI smoke checks were added; signed public release gates remain open.
-
-The fresh Linux xterm capture, keyboard detach check and measured run passed after continuation changes. A final frozen-source Linux test/build/installer check and GitHub native workflow results are recorded below after completion.
-
-The frozen-source Linux run passed all 24 tests, Clippy, release build and local installer smoke checks. Windows passed the same 24 tests and Clippy plus real compatibility installation checks. Both checksummed archives include local native installers. Updated measurement JSON files have the continuation- prefix: shell input median Windows 76.43 ms / Linux 6.59 ms, native PTY echo 15.58 ms / 3.10 ms, idle CPU 0% in both short samples. These samples do not establish performance acceptance targets.
-
-## GitHub checks, 2026-11-18
-
-The first pushed revision passed native Rust Linux x86_64 and ARM64 test/build/installer jobs. Windows exposed a flaky exit-status fixture: it sent exit keystrokes before interactive PowerShell startup finished. That fixture now launches a deterministic noninteractive child, still requiring Failed and exact exit code 7. The Go vulnerability scan identified GO-2026-6859 in Go 1.27.3; the preferred compiler/CI is upgraded to 1.27.4 and the minimum to 1.26.11. Final rerun results follow below.
-
-The Windows terminal-host Job Object regression also passes locally: the daemon remains reachable after closing a kill-on-close host job that permits breakaway. Startup requests breakaway and respects restrictive host policy, reporting when such a host can still terminate its daemon. Windows now has 25 tests; Linux has 24. The native Rust workflow for commit 009aba0 passed Windows x86_64, Linux x86_64 and Linux ARM64. The remaining Go CI failure was PowerShell splitting an unquoted coverage filename; the coverage arguments are now quoted.
+Broader terminal/SSH/live-provider testing, arbitrary selection, richer terminal
+protocols, fully nonblocking Unix readers, IPC deltas, soak profiling, signed
+distribution and the other documented release gates remain incomplete.
